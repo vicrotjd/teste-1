@@ -1,0 +1,660 @@
+-- ============================================================
+--  Nexus Stickman ESP + Aimbot
+--  Corrigido e completado — executor compatible
+--  Tecla padrão: C (segurar para mirar)
+--  Insert = toggle painel
+-- ============================================================
+
+local Players          = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService       = game:GetService("RunService")
+local TweenService     = game:GetService("TweenService")
+
+local LocalPlayer = Players.LocalPlayer
+local Camera      = workspace.CurrentCamera
+
+-- ============================================================
+-- CONFIG
+-- ============================================================
+local CFG = {
+    AIM_KEY        = Enum.KeyCode.C,
+    SMOOTHING      = 0.15,
+    MAX_DIST       = 400,
+    ESP_COLOR      = Color3.fromRGB(0, 255, 128),
+    TARGET_COLOR   = Color3.fromRGB(255, 50, 50),
+    ENABLE_ESP     = true,
+    ENABLE_AIMBOT  = true,
+    SHOW_NAMES     = true,
+    USE_HITBOX     = true,
+    STICKMAN_SCALE = 1.0,
+    LINE_THICKNESS = 3,
+    MAX_ESP_OBJECTS = 20,
+    TEAM_CHECK     = false,
+}
+
+local state = {
+    aiming     = false,
+    target     = nil,
+    billboards = {},
+    uiCreated  = false,
+}
+
+-- ============================================================
+-- UTILITÁRIOS
+-- ============================================================
+local function getHRP(model)
+    if not model or not model:IsA("Model") then return nil end
+    return model:FindFirstChild("HumanoidRootPart")
+end
+
+local function isAlive(model)
+    local hum = model and model:FindFirstChildOfClass("Humanoid")
+    return hum and hum.Health > 0
+end
+
+local function isFriendly(player)
+    if player == LocalPlayer then return true end
+    if not CFG.TEAM_CHECK then return false end
+    return player.Team ~= nil and player.Team == LocalPlayer.Team
+end
+
+local function getAimPoint(char)
+    if CFG.USE_HITBOX then
+        local head = char:FindFirstChild("Head")
+        if head then return head.Position end
+    end
+    local hrp = getHRP(char)
+    return hrp and hrp.Position
+end
+
+-- ============================================================
+-- ESP — BONECO PALITO
+-- ============================================================
+local function createStickman(player)
+    if state.billboards[player.Name] then
+        return state.billboards[player.Name]
+    end
+
+    local char = player.Character
+    if not char then return nil end
+    local hrp = getHRP(char)
+    if not hrp then return nil end
+
+    local sc = CFG.STICKMAN_SCALE
+    local bgui = Instance.new("BillboardGui")
+    bgui.Name        = "StickmanESP_" .. player.Name
+    bgui.Adornee     = hrp
+    bgui.Size        = UDim2.fromOffset(100 * sc, 150 * sc)
+    bgui.StudsOffset = Vector3.new(0, 1.5, 0)
+    bgui.AlwaysOnTop = true
+    bgui.Active      = false
+    bgui.ResetOnSpawn = false
+    bgui.Parent      = LocalPlayer:WaitForChild("PlayerGui")
+
+    local main = Instance.new("Frame", bgui)
+    main.Name                 = "Main"
+    main.Size                 = UDim2.fromScale(1, 1)
+    main.BackgroundTransparency = 1
+    main.BorderSizePixel      = 0
+
+    local function makeLine(name, w, h, sx, sy, rot)
+        local f = Instance.new("Frame", main)
+        f.Name              = name
+        f.Size              = UDim2.fromOffset(w, h)
+        f.Position          = UDim2.fromScale(sx, sy)
+        f.AnchorPoint       = Vector2.new(0.5, 0.5)
+        f.BackgroundColor3  = CFG.ESP_COLOR
+        f.BorderSizePixel   = 0
+        if rot and rot ~= 0 then f.Rotation = rot end
+        return f
+    end
+
+    -- Cabeça
+    local head = Instance.new("Frame", main)
+    head.Name              = "Head"
+    head.Size              = UDim2.fromOffset(16, 16)
+    head.Position          = UDim2.fromScale(0.5, 0.18)
+    head.AnchorPoint       = Vector2.new(0.5, 0.5)
+    head.BackgroundColor3  = Color3.new(0, 0, 0)
+    head.BorderSizePixel   = 0
+    local hs = Instance.new("UIStroke", head)
+    hs.Color     = CFG.ESP_COLOR
+    hs.Thickness = CFG.LINE_THICKNESS
+
+    -- Torso
+    makeLine("Torso",    CFG.LINE_THICKNESS, 50, 0.5,  0.5,  0)
+    -- Braços
+    makeLine("LeftArm",  CFG.LINE_THICKNESS, 35, 0.35, 0.4,  30)
+    makeLine("RightArm", CFG.LINE_THICKNESS, 35, 0.65, 0.4, -30)
+    -- Pernas
+    makeLine("LeftLeg",  CFG.LINE_THICKNESS, 45, 0.40, 0.75, 15)
+    makeLine("RightLeg", CFG.LINE_THICKNESS, 45, 0.60, 0.75,-15)
+
+    -- Nome
+    if CFG.SHOW_NAMES then
+        local nl = Instance.new("TextLabel", main)
+        nl.Name                 = "NameLabel"
+        nl.Size                 = UDim2.fromScale(1, 0.12)
+        nl.Position             = UDim2.fromScale(0, -0.12)
+        nl.BackgroundTransparency = 1
+        nl.Text                 = player.Name
+        nl.TextColor3           = Color3.new(1, 1, 1)
+        nl.Font                 = Enum.Font.GothamBold
+        nl.TextSize             = 12
+        nl.TextStrokeTransparency = 0.5
+    end
+
+    state.billboards[player.Name] = bgui
+    return bgui
+end
+
+local function removeStickman(name)
+    local bgui = state.billboards[name]
+    if bgui then
+        pcall(function() bgui:Destroy() end)
+        state.billboards[name] = nil
+    end
+end
+
+local function updateESP()
+    if not CFG.ENABLE_ESP then
+        for _, bgui in pairs(state.billboards) do
+            bgui.Enabled = false
+        end
+        return
+    end
+
+    local camPos        = Camera.CFrame.Position
+    local visibleList   = {}
+
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player == LocalPlayer then continue end
+        if isFriendly(player) then removeStickman(player.Name); continue end
+        local char = player.Character
+        if not char or not isAlive(char) then removeStickman(player.Name); continue end
+        local hrp = getHRP(char)
+        if not hrp then continue end
+        local dist = (camPos - hrp.Position).Magnitude
+        if dist <= CFG.MAX_DIST then
+            table.insert(visibleList, { player = player, dist = dist })
+        else
+            removeStickman(player.Name)
+        end
+    end
+
+    -- Respeita limite de objetos, remove os mais distantes primeiro
+    if #visibleList > CFG.MAX_ESP_OBJECTS then
+        table.sort(visibleList, function(a, b) return a.dist > b.dist end)
+        for i = CFG.MAX_ESP_OBJECTS + 1, #visibleList do
+            removeStickman(visibleList[i].player.Name)
+            visibleList[i] = nil
+        end
+    end
+
+    for _, entry in ipairs(visibleList) do
+        if not entry then continue end
+        local player = entry.player
+        local bgui = state.billboards[player.Name]
+        if not bgui then
+            bgui = createStickman(player)
+        end
+        if not bgui then continue end
+        bgui.Enabled = true
+
+        -- Atualiza cor da cabeça conforme alvo ativo
+        local mainFrame = bgui:FindFirstChild("Main")
+        if mainFrame then
+            local headFrame = mainFrame:FindFirstChild("Head")
+            if headFrame then
+                local stroke = headFrame:FindFirstChildOfClass("UIStroke")
+                if stroke then
+                    local isTarget = state.target and state.target.model == player
+                    stroke.Color = isTarget and CFG.TARGET_COLOR or CFG.ESP_COLOR
+                end
+            end
+        end
+    end
+end
+
+-- ============================================================
+-- AIMBOT
+-- ============================================================
+local function getTarget()
+    local best      = nil
+    local bestScore = -math.huge
+    local camCF     = Camera.CFrame
+    local camPos    = camCF.Position
+    local lookVec   = camCF.LookVector
+
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player == LocalPlayer then continue end
+        if isFriendly(player) then continue end
+        local char = player.Character
+        if not char or not isAlive(char) then continue end
+        local hrp = getHRP(char)
+        if not hrp then continue end
+
+        local dist = (camPos - hrp.Position).Magnitude
+        if dist > CFG.MAX_DIST or dist < 0.1 then continue end
+
+        local dir = (hrp.Position - camPos).Unit
+        local dot = lookVec:Dot(dir)
+        if dot > 0.85 then
+            local score = dot - (dist / 2000)
+            if score > bestScore then
+                bestScore = score
+                best = { model = player, hrp = hrp, dist = dist }
+            end
+        end
+    end
+    return best
+end
+
+local function applyAimbot()
+    if not (CFG.ENABLE_AIMBOT and state.aiming) then
+        state.target = nil
+        return
+    end
+
+    local target = getTarget()
+    state.target = target
+    if not target then return end
+
+    local char = target.model.Character
+    if not char then return end
+
+    local targetPos = getAimPoint(char)
+    if not targetPos then return end
+
+    local camCF    = Camera.CFrame
+    local camPos   = camCF.Position
+    local targetDir = targetPos - camPos
+    if targetDir.Magnitude < 0.1 then return end
+
+    local desiredLook = targetDir.Unit
+    local currentLook = camCF.LookVector
+    local smooth      = math.clamp(CFG.SMOOTHING, 0.01, 1)
+    local newLook     = currentLook:Lerp(desiredLook, smooth)
+
+    if newLook.Magnitude < 0.01 then return end
+
+    Camera.CFrame = CFrame.lookAt(camPos, camPos + newLook)
+end
+
+-- ============================================================
+-- PAINEL UI
+-- ============================================================
+local function createPanel()
+    if state.uiCreated then return end
+    state.uiCreated = true
+
+    -- Remove instância anterior se existir
+    local old = LocalPlayer:FindFirstChild("PlayerGui") and
+                LocalPlayer.PlayerGui:FindFirstChild("Nexus_Panel")
+    if old then old:Destroy() end
+
+    local gui = Instance.new("ScreenGui")
+    gui.Name          = "Nexus_Panel"
+    gui.ResetOnSpawn  = false
+    gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    gui.Parent        = LocalPlayer:WaitForChild("PlayerGui")
+
+    -- Janela principal
+    local win = Instance.new("Frame", gui)
+    win.Name             = "Window"
+    win.Size             = UDim2.fromOffset(270, 340)
+    win.Position         = UDim2.new(1, -280, 0, 10)
+    win.BackgroundColor3 = Color3.fromRGB(12, 12, 18)
+    win.BorderSizePixel  = 0
+    win.Active           = true
+    win.Draggable        = true
+
+    local winCorner = Instance.new("UICorner", win)
+    winCorner.CornerRadius = UDim.new(0, 10)
+    local winStroke = Instance.new("UIStroke", win)
+    winStroke.Color       = Color3.fromRGB(0, 220, 110)
+    winStroke.Thickness   = 1
+    winStroke.Transparency = 0.5
+
+    -- Header
+    local header = Instance.new("Frame", win)
+    header.Name             = "Header"
+    header.Size             = UDim2.new(1, 0, 0, 38)
+    header.BackgroundColor3 = Color3.fromRGB(8, 8, 14)
+    header.BorderSizePixel  = 0
+    local hCorner = Instance.new("UICorner", header)
+    hCorner.CornerRadius = UDim.new(0, 10)
+    -- Cobre cantos inferiores do header
+    local hFix = Instance.new("Frame", header)
+    hFix.Size             = UDim2.new(1, 0, 0, 10)
+    hFix.Position         = UDim2.new(0, 0, 1, -10)
+    hFix.BackgroundColor3 = Color3.fromRGB(8, 8, 14)
+    hFix.BorderSizePixel  = 0
+
+    local titleLbl = Instance.new("TextLabel", header)
+    titleLbl.Size               = UDim2.new(1, -50, 1, 0)
+    titleLbl.Position           = UDim2.new(0, 14, 0, 0)
+    titleLbl.BackgroundTransparency = 1
+    titleLbl.Text               = "NEXUS  CONTROLS"
+    titleLbl.TextColor3         = Color3.fromRGB(0, 255, 128)
+    titleLbl.Font               = Enum.Font.GothamBold
+    titleLbl.TextSize           = 13
+    titleLbl.TextXAlignment     = Enum.TextXAlignment.Left
+
+    -- Botão fechar / ocultar
+    local closeBtn = Instance.new("TextButton", header)
+    closeBtn.Size             = UDim2.fromOffset(26, 26)
+    closeBtn.Position         = UDim2.new(1, -32, 0.5, -13)
+    closeBtn.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+    closeBtn.Text             = "✕"
+    closeBtn.TextColor3       = Color3.new(1, 1, 1)
+    closeBtn.Font             = Enum.Font.GothamBold
+    closeBtn.TextSize         = 12
+    closeBtn.BorderSizePixel  = 0
+    local cCorner = Instance.new("UICorner", closeBtn)
+    cCorner.CornerRadius = UDim.new(0, 6)
+    closeBtn.MouseButton1Click:Connect(function()
+        win.Visible = not win.Visible
+    end)
+
+    -- Área de conteúdo com scroll
+    local content = Instance.new("ScrollingFrame", win)
+    content.Name                  = "Content"
+    content.Size                  = UDim2.new(1, -16, 1, -48)
+    content.Position              = UDim2.new(0, 8, 0, 42)
+    content.BackgroundTransparency = 1
+    content.BorderSizePixel       = 0
+    content.ScrollBarThickness    = 3
+    content.ScrollBarImageColor3  = Color3.fromRGB(0, 200, 100)
+    content.CanvasSize            = UDim2.new(0, 0, 0, 0)
+
+    local layout = Instance.new("UIListLayout", content)
+    layout.Padding           = UDim.new(0, 6)
+    layout.SortOrder         = Enum.SortOrder.LayoutOrder
+    layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+        content.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 10)
+    end)
+
+    local order = 0
+    local function nextOrder()
+        order = order + 1
+        return order
+    end
+
+    -- Separador de seção
+    local function makeSep(label)
+        local sep = Instance.new("Frame", content)
+        sep.Name             = "Sep_" .. label
+        sep.Size             = UDim2.new(1, 0, 0, 22)
+        sep.BackgroundTransparency = 1
+        sep.BorderSizePixel  = 0
+        sep.LayoutOrder      = nextOrder()
+
+        local sepLine = Instance.new("Frame", sep)
+        sepLine.Size             = UDim2.new(1, 0, 0, 1)
+        sepLine.Position         = UDim2.new(0, 0, 0.5, 0)
+        sepLine.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+        sepLine.BorderSizePixel  = 0
+
+        local sepLbl = Instance.new("TextLabel", sep)
+        sepLbl.Size                 = UDim2.fromOffset(120, 22)
+        sepLbl.Position             = UDim2.fromScale(0, 0)
+        sepLbl.BackgroundColor3     = Color3.fromRGB(12, 12, 18)
+        sepLbl.BackgroundTransparency = 0
+        sepLbl.Text                 = "  " .. label .. "  "
+        sepLbl.TextColor3           = Color3.fromRGB(0, 200, 100)
+        sepLbl.Font                 = Enum.Font.GothamBold
+        sepLbl.TextSize             = 10
+        sepLbl.TextXAlignment       = Enum.TextXAlignment.Left
+        sepLbl.BorderSizePixel      = 0
+    end
+
+    -- Toggle
+    local function makeToggle(label, default, callback)
+        local row = Instance.new("Frame", content)
+        row.Name             = "T_" .. label
+        row.Size             = UDim2.new(1, 0, 0, 34)
+        row.BackgroundTransparency = 1
+        row.BorderSizePixel  = 0
+        row.LayoutOrder      = nextOrder()
+
+        local lbl = Instance.new("TextLabel", row)
+        lbl.Size                = UDim2.new(0.65, 0, 1, 0)
+        lbl.Position            = UDim2.fromScale(0, 0)
+        lbl.BackgroundTransparency = 1
+        lbl.Text                = label
+        lbl.TextColor3          = Color3.fromRGB(210, 210, 210)
+        lbl.Font                = Enum.Font.Gotham
+        lbl.TextSize            = 12
+        lbl.TextXAlignment      = Enum.TextXAlignment.Left
+
+        -- Track do toggle
+        local track = Instance.new("Frame", row)
+        track.Size             = UDim2.fromOffset(44, 22)
+        track.Position         = UDim2.new(1, -44, 0.5, -11)
+        track.BackgroundColor3 = default and Color3.fromRGB(0, 190, 90) or Color3.fromRGB(55, 55, 65)
+        track.BorderSizePixel  = 0
+        local tCorner = Instance.new("UICorner", track)
+        tCorner.CornerRadius = UDim.new(0, 11)
+
+        local knob = Instance.new("Frame", track)
+        knob.Size             = UDim2.fromOffset(16, 16)
+        knob.Position         = default and UDim2.new(1, -19, 0.5, -8) or UDim2.new(0, 3, 0.5, -8)
+        knob.BackgroundColor3 = Color3.new(1, 1, 1)
+        knob.BorderSizePixel  = 0
+        local kCorner = Instance.new("UICorner", knob)
+        kCorner.CornerRadius = UDim.new(0, 8)
+
+        local toggled = default
+        local btn = Instance.new("TextButton", row)
+        btn.Size                = UDim2.fromScale(1, 1)
+        btn.BackgroundTransparency = 1
+        btn.Text                = ""
+        btn.BorderSizePixel     = 0
+
+        btn.MouseButton1Click:Connect(function()
+            toggled = not toggled
+            TweenService:Create(track, TweenInfo.new(0.15), {
+                BackgroundColor3 = toggled and Color3.fromRGB(0, 190, 90) or Color3.fromRGB(55, 55, 65)
+            }):Play()
+            TweenService:Create(knob, TweenInfo.new(0.15), {
+                Position = toggled and UDim2.new(1, -19, 0.5, -8) or UDim2.new(0, 3, 0.5, -8)
+            }):Play()
+            if callback then callback(toggled) end
+        end)
+
+        return row
+    end
+
+    -- Slider
+    local function makeSlider(label, min, max, default, callback)
+        local row = Instance.new("Frame", content)
+        row.Name             = "S_" .. label
+        row.Size             = UDim2.new(1, 0, 0, 50)
+        row.BackgroundTransparency = 1
+        row.BorderSizePixel  = 0
+        row.LayoutOrder      = nextOrder()
+
+        local lbl = Instance.new("TextLabel", row)
+        lbl.Name                = "Lbl"
+        lbl.Size                = UDim2.new(0.75, 0, 0, 22)
+        lbl.BackgroundTransparency = 1
+        lbl.Text                = label
+        lbl.TextColor3          = Color3.fromRGB(210, 210, 210)
+        lbl.Font                = Enum.Font.Gotham
+        lbl.TextSize            = 12
+        lbl.TextXAlignment      = Enum.TextXAlignment.Left
+
+        local valLbl = Instance.new("TextLabel", row)
+        valLbl.Size             = UDim2.new(0.25, 0, 0, 22)
+        valLbl.Position         = UDim2.new(0.75, 0, 0, 0)
+        valLbl.BackgroundTransparency = 1
+        valLbl.Text             = tostring(default)
+        valLbl.TextColor3       = Color3.fromRGB(0, 220, 110)
+        valLbl.Font             = Enum.Font.GothamBold
+        valLbl.TextSize         = 12
+        valLbl.TextXAlignment   = Enum.TextXAlignment.Right
+
+        local track = Instance.new("Frame", row)
+        track.Name             = "Track"
+        track.Size             = UDim2.new(1, 0, 0, 6)
+        track.Position         = UDim2.new(0, 0, 0, 28)
+        track.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
+        track.BorderSizePixel  = 0
+        local tCorner = Instance.new("UICorner", track)
+        tCorner.CornerRadius = UDim.new(0, 3)
+
+        local ratio = math.clamp((default - min) / (max - min), 0, 1)
+
+        local fill = Instance.new("Frame", track)
+        fill.Name             = "Fill"
+        fill.Size             = UDim2.fromScale(ratio, 1)
+        fill.BackgroundColor3 = Color3.fromRGB(0, 200, 100)
+        fill.BorderSizePixel  = 0
+        local fCorner = Instance.new("UICorner", fill)
+        fCorner.CornerRadius = UDim.new(0, 3)
+
+        local handle = Instance.new("Frame", track)
+        handle.Size             = UDim2.fromOffset(12, 12)
+        handle.Position         = UDim2.new(ratio, -6, 0.5, -6)
+        handle.BackgroundColor3 = Color3.fromRGB(0, 240, 120)
+        handle.BorderSizePixel  = 0
+        local hdCorner = Instance.new("UICorner", handle)
+        hdCorner.CornerRadius = UDim.new(0, 6)
+
+        -- Drag logic
+        local dragging = false
+        local hitbox = Instance.new("TextButton", track)
+        hitbox.Size                = UDim2.new(1, 0, 0, 20)
+        hitbox.Position            = UDim2.new(0, 0, 0.5, -10)
+        hitbox.BackgroundTransparency = 1
+        hitbox.Text                = ""
+        hitbox.BorderSizePixel     = 0
+
+        local function applyDrag(inputX)
+            local abs = track.AbsolutePosition.X
+            local sz  = track.AbsoluteSize.X
+            if sz <= 0 then return end
+            local r   = math.clamp((inputX - abs) / sz, 0, 1)
+            local val = math.floor(min + (max - min) * r)
+            fill.Size            = UDim2.fromScale(r, 1)
+            handle.Position      = UDim2.new(r, -6, 0.5, -6)
+            valLbl.Text          = tostring(val)
+            if callback then callback(val) end
+        end
+
+        hitbox.MouseButton1Down:Connect(function(x, _)
+            dragging = true
+            applyDrag(x)
+        end)
+        UserInputService.InputEnded:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.MouseButton1 then
+                dragging = false
+            end
+        end)
+        UserInputService.InputChanged:Connect(function(i)
+            if dragging and i.UserInputType == Enum.UserInputType.MouseMovement then
+                applyDrag(i.Position.X)
+            end
+        end)
+
+        return row
+    end
+
+    -- ---- Popula o painel ----
+    makeSep("AIMBOT")
+    makeToggle("Enable Aimbot", CFG.ENABLE_AIMBOT, function(v) CFG.ENABLE_AIMBOT = v end)
+    makeToggle("Use Hitbox (Head)", CFG.USE_HITBOX, function(v) CFG.USE_HITBOX = v end)
+    makeToggle("Team Check", CFG.TEAM_CHECK, function(v) CFG.TEAM_CHECK = v end)
+    makeSlider("Smoothing", 1, 100, math.floor(CFG.SMOOTHING * 100), function(v)
+        CFG.SMOOTHING = v / 100
+    end)
+    makeSlider("Max Distance", 50, 1000, CFG.MAX_DIST, function(v)
+        CFG.MAX_DIST = v
+    end)
+
+    makeSep("ESP")
+    makeToggle("Enable ESP", CFG.ENABLE_ESP, function(v) CFG.ENABLE_ESP = v end)
+    makeToggle("Show Names", CFG.SHOW_NAMES, function(v) CFG.SHOW_NAMES = v end)
+    makeSlider("Stickman Scale", 50, 200, math.floor(CFG.STICKMAN_SCALE * 100), function(v)
+        CFG.STICKMAN_SCALE = v / 100
+        -- Rebuild ESP ao mudar escala
+        for name, bgui in pairs(state.billboards) do
+            pcall(function() bgui:Destroy() end)
+            state.billboards[name] = nil
+        end
+    end)
+    makeSlider("Line Thickness", 1, 8, CFG.LINE_THICKNESS, function(v)
+        CFG.LINE_THICKNESS = v
+        for name, bgui in pairs(state.billboards) do
+            pcall(function() bgui:Destroy() end)
+            state.billboards[name] = nil
+        end
+    end)
+    makeSlider("ESP Max Objects", 5, 50, CFG.MAX_ESP_OBJECTS, function(v)
+        CFG.MAX_ESP_OBJECTS = v
+    end)
+end
+
+-- ============================================================
+-- LIMPEZA ao sair / respawn
+-- ============================================================
+Players.PlayerRemoving:Connect(function(p)
+    removeStickman(p.Name)
+end)
+for _, p in ipairs(Players:GetPlayers()) do
+    if p ~= LocalPlayer then
+        p.CharacterRemoving:Connect(function()
+            removeStickman(p.Name)
+        end)
+    end
+end
+Players.PlayerAdded:Connect(function(p)
+    p.CharacterRemoving:Connect(function()
+        removeStickman(p.Name)
+    end)
+end)
+
+-- ============================================================
+-- INPUT
+-- ============================================================
+UserInputService.InputBegan:Connect(function(input, gpe)
+    if gpe then return end
+    if input.KeyCode == CFG.AIM_KEY then
+        state.aiming = true
+    end
+    -- Insert = toggle painel
+    if input.KeyCode == Enum.KeyCode.Insert then
+        local pg = LocalPlayer:FindFirstChild("PlayerGui")
+        local panel = pg and pg:FindFirstChild("Nexus_Panel")
+        if panel then
+            local win = panel:FindFirstChild("Window")
+            if win then win.Visible = not win.Visible end
+        end
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input, gpe)
+    if input.KeyCode == CFG.AIM_KEY then
+        state.aiming = false
+        state.target = nil
+    end
+end)
+
+-- ============================================================
+-- LOOP PRINCIPAL
+-- ============================================================
+RunService.Heartbeat:Connect(function()
+    pcall(applyAimbot)
+end)
+
+RunService.RenderStepped:Connect(function()
+    pcall(updateESP)
+end)
+
+-- ============================================================
+-- INIT
+-- ============================================================
+createPanel()
+print("[Nexus] Carregado. Segurar " .. tostring(CFG.AIM_KEY):gsub("Enum.KeyCode.", "") .. " = aimbot | Insert = painel")
