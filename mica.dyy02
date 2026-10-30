@@ -1,42 +1,72 @@
--- VL Scanner v2 | Xeno
-local kw = {"spin","luck","reward","coin","currency","claim","mission","give","money","token","prize","daily","chest","task","complete","finish","purchase"}
+-- Universal Remote & Value Scanner
+-- Xeno / KRNL / Synapse / Solara compatible
 
-local function match(name)
-    name = name:lower()
-    for _, k in ipairs(kw) do
-        if name:find(k) then return true end
-    end
-    return false
+local Players = game:GetService("Players")
+local plr = Players.LocalPlayer
+
+local function sep(title)
+    warn(string.rep("=", 10) .. " " .. title .. " " .. string.rep("=", 10))
 end
 
--- REMOTES
-warn("===== REMOTES RELEVANTES =====")
-local total = 0
+-- 1. TODOS OS REMOTES
+sep("REMOTES")
+local remotes = {}
 for _, v in ipairs(game:GetDescendants()) do
     if v:IsA("RemoteEvent") or v:IsA("RemoteFunction") then
-        total = total + 1
-        if match(v.Name) then
-            warn(">> " .. v.ClassName .. " | " .. v:GetFullName())
+        table.insert(remotes, v)
+        print("[" .. v.ClassName .. "] " .. v:GetFullName())
+    end
+end
+warn("Total: " .. #remotes)
+
+-- 2. PLAYER LEADERSTATS / VALUES
+sep("PLAYER DATA")
+for _, v in ipairs(plr:GetDescendants()) do
+    local t = v.ClassName
+    if t:find("Value") then
+        print(v.Name .. " = " .. tostring(v.Value) .. "  (" .. v:GetFullName() .. ")")
+    end
+end
+
+-- 3. FIRESERVER HOOK ao vivo
+sep("FIRESERVER HOOK — faz a acao agora")
+local hooked = false
+
+pcall(function()
+    local orig = Instance.new("RemoteEvent").FireServer
+    hookfunction(orig, newcclosure(function(self, ...)
+        local args = {...}
+        local s = "[FIRE] " .. self:GetFullName()
+        for i, a in ipairs(args) do
+            s = s .. " | [" .. i .. "] " .. tostring(a)
+        end
+        warn(s)
+        return orig(self, ...)
+    end))
+    hooked = true
+end)
+
+if not hooked then
+    -- fallback: monitora mudança nos values do player
+    warn("hookfunction indisponivel — monitorando values do player")
+    local tracked = {}
+    for _, v in ipairs(plr:GetDescendants()) do
+        if v:IsA("IntValue") or v:IsA("NumberValue") then
+            tracked[v] = v.Value
+            v.Changed:Connect(function(new)
+                warn("[VALUE CHANGE] " .. v:GetFullName() .. ": " .. tostring(tracked[v]) .. " -> " .. tostring(new))
+                tracked[v] = new
+            end)
         end
     end
 end
-warn("Total de remotes encontrados: " .. total)
 
--- TODOS OS REMOTES (caso nenhum keyword bata)
-warn("===== TODOS OS REMOTES =====")
-for _, v in ipairs(game:GetDescendants()) do
+-- 4. MONITOR DE NOVOS REMOTES (spawns dinamicos)
+sep("MONITOR DINAMICO")
+game.DescendantAdded:Connect(function(v)
     if v:IsA("RemoteEvent") or v:IsA("RemoteFunction") then
-        print(v.ClassName .. " | " .. v:GetFullName())
+        warn("[NOVO REMOTE] " .. v:GetFullName())
     end
-end
+end)
 
--- PLAYER VALUES
-warn("===== PLAYER VALUES =====")
-local plr = game.Players.LocalPlayer
-for _, v in ipairs(plr:GetDescendants()) do
-    if v:IsA("IntValue") or v:IsA("NumberValue") or v:IsA("StringValue") or v:IsA("BoolValue") then
-        print(v.Name .. " = " .. tostring(v.Value) .. "  [" .. v:GetFullName() .. "]")
-    end
-end
-
-warn("===== FIM =====")
+warn("Scanner ativo. Faz a acao no jogo agora.")
