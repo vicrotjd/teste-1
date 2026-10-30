@@ -1,0 +1,228 @@
+-- Universal Roblox ESP & Aimbot
+-- Configurações
+local CONFIG = {
+    ESP_COLOR = Color3.new(0, 1, 0.5), -- Verde Neon
+    ESP_FILL = Color3.new(0, 1, 0.5),
+    ESP_FILL_TRANSPARENCY = 0.85,
+    SHOW_DIST = true,
+    SHOW_NAME = true,
+    AIM_BIND = Enum.KeyCode.C, -- Tecla para ativar Aimbot
+    FOV_RADIUS = 120, -- Raio do FOV na tela
+    FOV_COLOR = Color3.new(1, 1, 1),
+    SMOOTHING = 0.15, -- 0 = snap, 1 = muito lento
+    MAX_AIM_DISTANCE = 500, -- Distância máxima do aimbot
+    IGNORE_FRIENDS = true, -- Ignorar players no mesmo team (se TeamColor for igual)
+    TEAM_CHECK = true,
+}
+
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+local UserInputService = game:GetService("UserInputService")
+
+-- Estado
+local aimActive = false
+local currentTarget = nil
+local lastAimVector = Vector3.zero
+
+-- Utility: Obter HumanoidRootPart de um Model
+local function getRootPart(model)
+    local hrp = model:FindFirstChild("HumanoidRootPart")
+    if hrp and hrp:IsA("BasePart") then
+        return hrp
+    end
+    return nil
+}
+
+-- Utility: Verificar se é "amigo" (mesmo time ou LocalPlayer)
+local function isFriend(model)
+    if model == LocalPlayer.Character then return true end
+    if not CONFIG.TEAM_CHECK then return false end
+    local team = model:FindFirstChildOfClass("Team")
+    if team and team.Team == LocalPlayer.Team then
+        return true
+    end
+    return false
+end
+
+-- Utility: Converter Vector3 para 2D (tela)
+local function worldToScreen(pos)
+    return Camera:WorldToViewportPoint(pos)
+end
+
+-- Utility: Encontrar alvo ideal (mais próximo do centro do FOV)
+local function getBestTarget()
+    local bestTarget = nil
+    local bestDistance = math.huge
+    
+    local camCFrame = Camera.CFrame
+    local camPos = camCFrame.Position
+    
+    for _, model in ipairs(Players:GetPlayers()) do
+        if model == LocalPlayer then continue end
+        if not model.Character then continue end
+        local char = model.Character
+        
+        if isFriend(char) then continue end
+        
+        local hrp = getRootPart(char)
+        if not hrp then continue end
+        
+        local targetPos = hrp.Position
+        local dist = (camPos - targetPos).Magnitude
+        
+        if dist > CONFIG.MAX_AIM_DISTANCE then continue end
+        
+        -- Verificar se está dentro do FOV (ângulo)
+        local lookDir = camCFrame.LookVector
+        local targetDir = (targetPos - camPos).Unit
+        local dot = lookDir:Dot(targetDir)
+        
+        -- FOV em radianos aproximado (baseado no FOV_RADIUS em pixels seria mais complexo, 
+        -- mas usamos um ângulo fixo de ~30 graus ou baseado na distância)
+        local fovAngle = math.rad(25) -- Ângulo de tolerância
+        if dot > math.cos(fovAngle) then
+            -- Prioriza o mais próximo da linha de visão e mais perto
+            if dist < bestDistance then
+                bestDistance = dist
+                bestTarget = {
+                    model = model,
+                    hrp = hrp,
+                    pos = targetPos
+                }
+            end
+        end
+    end
+    
+    return bestTarget
+end
+
+-- Renderização da ESP (DrawToScreen)
+local function drawESP()
+    -- Limpar desenhos antigos (opcional, mas DrawToScreen não acumula se reutilizarmos a tabela)
+    local objects = {}
+    
+    for _, model in ipairs(Players:GetPlayers()) do
+        if model == LocalPlayer then continue end
+        if not model.Character then continue end
+        local char = model.Character
+        
+        if isFriend(char) then continue end
+        
+        local hrp = getRootPart(char)
+        if not hrp then continue end
+        
+        local pos = hrp.Position
+        local dist = (Camera.CFrame.Position - pos).Magnitude
+        
+        -- Verificar se está na frente da câmera
+        local screenPos, onScreen = worldToScreen(pos)
+        if not onScreen then continue end
+        
+        -- Dimensões baseadas na distância (perspectiva simples)
+        local size = math.clamp(50 / dist, 5, 50)
+        
+        local color = CONFIG.ESP_COLOR
+        if isFriend(char) then
+            color = Color3.new(0.5, 0.5, 1) -- Azul para amigos
+        end
+        
+        local data = {
+            Position = Vector2.new(screenPos.X, screenPos.Y),
+            Size = Vector2.new(size, size),
+            Thickness = 2,
+            Color = color,
+            Filled = false,
+            Visible = true
+        }
+        
+        if CONFIG.ESP_FILL then
+            data.Filled = true
+            data.Color = CONFIG.ESP_FILL
+            data.Thickness = 0
+        end
+        
+        table.insert(objects, data)
+        
+        -- Texto (Nome e Distância)
+        local textData = {
+            Text = model.Name,
+            Color = Color3.new(1, 1, 1),
+            BackgroundColor3 = Color3.new(0, 0, 0),
+            BackgroundTransparency = 0.5,
+            Position = Vector2.new(screenPos.X, screenPos.Y - size),
+            Size = Vector2.new(0, 0), -- Auto size
+            Visible = CONFIG.SHOW_NAME
+        }
+        
+        if CONFIG.SHOW_DIST then
+            textData.Text = string.format("%s\n%.0f", model.Name, dist)
+        end
+        
+        table.insert(objects, textData)
+    end
+    
+    Camera:DrawToScreen(objects)
+end
+
+-- Lógica de Aimbot
+local function handleAimbot()
+    if not aimActive then
+        currentTarget = nil
+        return
+    end
+    
+    local target = getBestTarget()
+    
+    if target then
+        currentTarget = target
+        local targetPos = target.pos
+        
+        -- Cálculo suave
+        local camCFrame = Camera.CFrame
+        local currentLook = camCFrame.LookVector
+        local desiredLook = (targetPos - camCFrame.Position).Unit
+        
+        -- Interpolação
+        local newLook = currentLook:Lerp(desiredLook, CONFIG.SMOOTHING)
+        
+        -- Aplicar nova rotação
+        Camera.CFrame = CFrame.lookAt(camCFrame.Position, camCFrame.Position + newLook)
+    else
+        currentTarget = nil
+    end
+end
+
+-- Input Bind
+UserInputService.InputBegan:Connect(function(input, processed)
+    if processed then return end
+    if input.KeyCode == CONFIG.AIM_BIND then
+        aimActive = true
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input, processed)
+    if input.KeyCode == CONFIG.AIM_BIND then
+        aimActive = false
+    end
+end)
+
+-- Render Loop
+local lastTime = tick()
+local function update()
+    while task.wait() do
+        local now = tick()
+        local dt = now - lastTime
+        lastTime = now
+        
+        -- Atualizar Aimbot
+        handleAimbot()
+        
+        -- Desenhar ESP
+        drawESP()
+    end
+end
+
+task.spawn(update)
+
+print("[Universal ESP] Script carregado. Segure " .. CONFIG.AIM_BIND.Name .. " para ativar o Aimbot.")
