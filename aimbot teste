@@ -1,15 +1,16 @@
--- Nexus ESP: Clean UI + Universal Aimbot/ESP
--- Desenvolvido por DeepHat (Kindo)
+-- Nexus ESP v3: Native Universal (No DrawToScreen)
+-- Funciona em qualquer jogo Roblox, sem APIs proprietárias.
 
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
 
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
 -- ==========================================
--- CONFIGURAÇÕES (Editáveis via UI)
+-- CONFIGURAÇÕES
 -- ==========================================
 local CFG = {
     AIM_KEY = Enum.KeyCode.C,
@@ -17,22 +18,20 @@ local CFG = {
     MAX_DIST = 400,
     ESP_COLOR = Color3.fromRGB(0, 255, 128),
     TARGET_COLOR = Color3.fromRGB(255, 0, 0),
-    FOV_RADIUS = 100,
-    SHOW_NAMES = true,
     ENABLE_ESP = true,
     ENABLE_AIMBOT = true,
-    ENABLE_FOV = true,
-    MAX_ESP_OBJECTS = 50
+    SHOW_NAMES = true,
+    MAX_ESP_OBJECTS = 25 -- Limite de Billboards para performance
 }
 
 local state = {
     aiming = false,
     target = nil,
-    uiOpen = true
+    activeBillboards = {} -- [Player] = BillboardGui
 }
 
 -- ==========================================
--- LÓGICA DE ESP/AIMBOT
+-- UTILITÁRIOS
 -- ==========================================
 local function getHRP(model)
     if not model or not model:IsA("Model") then return nil end
@@ -40,20 +39,148 @@ local function getHRP(model)
     return (hrp and hrp:IsA("BasePart")) and hrp or nil
 end
 
-local function W2S(pos)
-    if not Camera or not pos then return Vector2.new(0,0), false end
-    local success, screenPos, onScreen = pcall(function()
-        return Camera:WorldToViewportPoint(pos)
-    end)
-    if not success then return Vector2.new(0,0), false end
-    return screenPos, onScreen
-end
-
 local function isFriendly(model)
     if model == LocalPlayer.Character then return true end
     local team = model:FindFirstChildOfClass("Team")
     if team and team.Team == LocalPlayer.Team then return true end
     return false
+end
+
+-- Cria ou atualiza um BillboardGui para um player
+local function createBillboard(player)
+    if state.activeBillboards[player] then
+        return state.activeBillboards[player]
+    end
+
+    local bgui = Instance.new("BillboardGui")
+    bgui.Name = "ESP_" .. player.Name
+    bgui.Adornee = getHRP(player.Character) or player.Character:FindFirstChild("Head")
+    bgui.Size = UDim2.fromOffset(200, 100)
+    bgui.StudsOffset = Vector3.new(0, 1, 0)
+    bgui.AlwaysOnTop = true
+    bgui.Active = false
+    bgui.ResetOnSpawn = false
+    bgui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+
+    local frame = Instance.new("Frame", bgui)
+    frame.Name = "ESPFrame"
+    frame.Size = UDim2.fromScale(1, 1)
+    frame.BackgroundTransparency = 1
+    frame.BorderSizePixel = 0
+
+    local corner = Instance.new("UICorner", frame)
+    corner.CornerRadius = UDim.new(0, 8)
+
+    local stroke = Instance.new("UIStroke", frame)
+    stroke.Color = CFG.ESP_COLOR
+    stroke.Thickness = 2
+    stroke.Transparency = 0.2
+
+    local nameLabel = Instance.new("TextLabel", frame)
+    nameLabel.Name = "NameLabel"
+    nameLabel.Size = UDim2.fromScale(1, 0.5)
+    nameLabel.Position = UDim2.fromScale(0, -0.5)
+    nameLabel.BackgroundTransparency = 1
+    nameLabel.Text = player.Name
+    nameLabel.TextColor3 = Color3.new(1, 1, 1)
+    nameLabel.Font = Enum.Font.GothamBold
+    nameLabel.TextSize = 16
+
+    state.activeBillboards[player] = bgui
+    return bgui
+end
+
+local function removeBillboard(player)
+    local bgui = state.activeBillboards[player]
+    if bgui then
+        bgui:Destroy()
+        state.activeBillboards[player] = nil
+    end
+end
+
+-- Limpa Billboards de players que saíram ou ficaram fora do alcance
+local function cleanupBillboards()
+    for player, bgui in pairs(state.activeBillboards) do
+        local shouldRemove = false
+        if not player.Character then
+            shouldRemove = true
+        elseif isFriendly(player.Character) then
+            shouldRemove = true
+        else
+            local hrp = getHRP(player.Character)
+            if hrp then
+                local dist = (Camera.CFrame.Position - hrp.Position).Magnitude
+                if dist > CFG.MAX_DIST then
+                    shouldRemove = true
+                end
+            end
+        end
+        
+        if shouldRemove then
+            removeBillboard(player)
+        end
+    end
+end
+
+-- ==========================================
+-- LÓGICA PRINCIPAL
+-- ==========================================
+local function updateESP()
+    if not CFG.ENABLE_ESP then
+        for _, bgui in pairs(state.activeBillboards) do
+            bgui.Enabled = false
+        end
+        return
+    end
+
+    local camPos = Camera.CFrame.Position
+    local count = 0
+
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player == LocalPlayer then continue end
+        if not player.Character then continue end
+        if isFriendly(player.Character) then
+            removeBillboard(player)
+            continue
+        end
+
+        local hrp = getHRP(player.Character)
+        if not hrp then continue end
+
+        local dist = (camPos - hrp.Position).Magnitude
+        if dist > CFG.MAX_DIST then
+            removeBillboard(player)
+            continue
+        end
+
+        -- Limita a quantidade de Billboards ativos
+        if count >= CFG.MAX_ESP_OBJECTS then
+            if not state.activeBillboards[player] then continue end
+        else
+            count += 1
+        end
+
+        local bgui = createBillboard(player)
+        bgui.Enabled = true
+        
+        -- Atualiza cor se for o alvo do Aimbot
+        local stroke = bgui:FindFirstChild("ESPFrame"):FindFirstChild("UIStroke")
+        if stroke then
+            if state.target and state.target.model == player then
+                stroke.Color = CFG.TARGET_COLOR
+            else
+                stroke.Color = CFG.ESP_COLOR
+            end
+        end
+        
+        -- Esconde nome se configurado
+        local nameLabel = bgui:FindFirstChild("ESPFrame"):FindFirstChild("NameLabel")
+        if nameLabel then
+            nameLabel.Visible = CFG.SHOW_NAMES
+        end
+    end
+
+    cleanupBillboards()
 end
 
 local function getTarget()
@@ -64,12 +191,12 @@ local function getTarget()
 
     if not (camPos and lookVec) then return nil end
 
-    for _, plr in ipairs(Players:GetPlayers()) do
-        if plr == LocalPlayer then continue end
-        local char = plr.Character
-        if not char or isFriendly(char) then continue end
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player == LocalPlayer then continue end
+        if not player.Character then continue end
+        if isFriendly(player.Character) then continue end
 
-        local hrp = getHRP(char)
+        local hrp = getHRP(player.Character)
         if not hrp then continue end
 
         local dist = (camPos - hrp.Position).Magnitude
@@ -82,77 +209,11 @@ local function getTarget()
             local score = dot - (dist / 1000)
             if score > bestScore then
                 bestScore = score
-                best = { model = plr, hrp = hrp, pos = hrp.Position, dist = dist }
+                best = { model = player, hrp = hrp, pos = hrp.Position, dist = dist }
             end
         end
     end
     return best
-end
-
-local function renderESP()
-    if not CFG.ENABLE_ESP then return end
-    local objects = {}
-    local camPos = Camera.CFrame.Position
-    local vpSize = Camera.ViewportSize
-    if vpSize.X <= 0 or vpSize.Y <= 0 then return end
-
-    if CFG.ENABLE_FOV then
-        table.insert(objects, {
-            Position = Vector2.new(vpSize.X / 2, vpSize.Y / 2),
-            Size = Vector2.new(CFG.FOV_RADIUS, CFG.FOV_RADIUS),
-            Thickness = 2,
-            Color = Color3.new(1, 1, 1),
-            Filled = false,
-            Visible = true
-        })
-    end
-
-    local count = 0
-    for _, plr in ipairs(Players:GetPlayers()) do
-        if count >= CFG.MAX_ESP_OBJECTS then break end
-        if plr == LocalPlayer then continue end
-        local char = plr.Character
-        if not char or isFriendly(char) then continue end
-
-        local hrp = getHRP(char)
-        if not hrp then continue end
-
-        local screenPos, onScreen = W2S(hrp.Position)
-        if not onScreen then continue end
-
-        local dist = (camPos - hrp.Position).Magnitude
-        local size = math.clamp(40 / dist, 10, 60)
-        local color = CFG.ESP_COLOR
-        if state.target and state.target.model == plr then
-            color = CFG.TARGET_COLOR
-        end
-
-        table.insert(objects, {
-            Position = Vector2.new(screenPos.X, screenPos.Y),
-            Size = Vector2.new(size, size),
-            Thickness = 2,
-            Color = color,
-            Filled = false,
-            Visible = true
-        })
-
-        if CFG.SHOW_NAMES and dist < 200 then
-            table.insert(objects, {
-                Text = plr.Name,
-                Color = Color3.new(1, 1, 1),
-                BackgroundColor3 = Color3.new(0, 0, 0),
-                BackgroundTransparency = 0.6,
-                Position = Vector2.new(screenPos.X, screenPos.Y - size),
-                Size = Vector2.new(0, 0),
-                Visible = true
-            })
-        end
-        count += 1
-    end
-
-    if #objects > 0 then
-        pcall(function() Camera:DrawToScreen(objects) end)
-    end
 end
 
 local function applyAimbot()
@@ -183,213 +244,34 @@ local function applyAimbot()
 end
 
 -- ==========================================
--- UI: PAINEL CLEAN "NEXUS"
+-- INPUT
 -- ==========================================
-local function createUI()
-    local gui = Instance.new("ScreenGui")
-    gui.Name = "Nexus_UI"
-    gui.ResetOnSpawn = false
-    gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    gui.Parent = LocalPlayer:WaitForChild("PlayerGui")
-
-    local main = Instance.new("Frame")
-    main.Name = "Main"
-    main.Size = UDim2.fromOffset(300, 400)
-    main.Position = UDim2.fromScale(0.5, 0.5)
-    main.AnchorPoint = Vector2.new(0.5, 0.5)
-    main.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
-    main.BorderSizePixel = 0
-    main.Active = true
-    main.Draggable = true
-    main.Parent = gui
-
-    local mainCorner = Instance.new("UICorner", main)
-    mainCorner.CornerRadius = UDim.new(0, 12)
-    
-    local mainStroke = Instance.new("UIStroke", main)
-    mainStroke.Color = Color3.fromRGB(255, 255, 255)
-    mainStroke.Thickness = 1
-    mainStroke.Transparency = 0.8
-
-    -- Título
-    local titleBar = Instance.new("Frame", main)
-    titleBar.Name = "TitleBar"
-    titleBar.Size = UDim2.fromScale(1, 1)
-    titleBar.Position = UDim2.fromScale(0, 0)
-    titleBar.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
-    titleBar.BorderSizePixel = 0
-    
-    local titleCorner = Instance.new("UICorner", titleBar)
-    titleCorner.CornerRadius = UDim.new(0, 12)
-    
-    -- Clip para arredondar apenas o topo
-    local clipFrame = Instance.new("Frame", main)
-    clipFrame.Size = UDim2.fromScale(1, 0.15)
-    clipFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
-    clipFrame.BorderSizePixel = 0
-    local clipCorner = Instance.new("UICorner", clipFrame)
-    clipCorner.CornerRadius = UDim.new(0, 12)
-
-    local titleLabel = Instance.new("TextLabel", main)
-    titleLabel.Size = UDim2.fromScale(1, 0.15)
-    titleLabel.Position = UDim2.fromScale(0, 0)
-    titleLabel.BackgroundTransparency = 1
-    titleLabel.Text = "  NEXUS ESP"
-    titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-    titleLabel.TextXAlignment = Enum.TextXAlignment.Left
-    titleLabel.Font = Enum.Font.GothamBold
-    titleLabel.TextSize = 16
-
-    local closeBtn = Instance.new("TextButton", main)
-    closeBtn.Size = UDim2.fromOffset(30, 20)
-    closeBtn.Position = UDim2.new(1, -35, 0, 5)
-    closeBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
-    closeBtn.Text = "✕"
-    closeBtn.TextColor3 = Color3.new(1,1,1)
-    closeBtn.Font = Enum.Font.GothamBold
-    closeBtn.BorderSizePixel = 0
-    local closeCorner = Instance.new("UICorner", closeBtn)
-    closeCorner.CornerRadius = UDim.new(0, 6)
-    closeBtn.MouseButton1Click:Connect(function()
-        gui.Enabled = not gui.Enabled
-    end)
-
-    -- Scroll Frame para opções
-    local scrollFrame = Instance.new("ScrollingFrame", main)
-    scrollFrame.Name = "Options"
-    scrollFrame.Size = UDim2.new(1, -10, 1, -40)
-    scrollFrame.Position = UDim2.new(0, 5, 0, 35)
-    scrollFrame.BackgroundTransparency = 1
-    scrollFrame.BorderSizePixel = 0
-    scrollFrame.ScrollBarThickness = 4
-    scrollFrame.ScrollBarImageColor3 = Color3.fromRGB(100, 100, 100)
-    
-    local listLayout = Instance.new("UIListLayout", scrollFrame)
-    listLayout.Padding = UDim.new(0, 8)
-    listLayout.SortOrder = Enum.SortOrder.LayoutOrder
-
-    local function createToggle(title, default, callback)
-        local toggleFrame = Instance.new("Frame", scrollFrame)
-        toggleFrame.Name = "Toggle_" .. title
-        toggleFrame.Size = UDim2.fromScale(1, 0)
-        toggleFrame.AutoHeight = true
-        toggleFrame.BackgroundTransparency = 1
-        
-        local label = Instance.new("TextLabel", toggleFrame)
-        label.Size = UDim2.fromScale(0.6, 1)
-        label.BackgroundTransparency = 1
-        label.Text = title
-        label.TextColor3 = Color3.fromRGB(200, 200, 200)
-        label.Font = Enum.Font.Gotham
-        label.TextSize = 14
-        label.TextXAlignment = Enum.TextXAlignment.Left
-        
-        local btn = Instance.new("TextButton", toggleFrame)
-        btn.Size = UDim2.fromOffset(60, 28)
-        btn.Position = UDim2.new(1, -60, 0, 0)
-        btn.BackgroundColor3 = default and Color3.fromRGB(0, 200, 100) or Color3.fromRGB(60, 60, 70)
-        btn.Text = default and "ON" or "OFF"
-        btn.TextColor3 = Color3.new(1,1,1)
-        btn.Font = Enum.Font.GothamBold
-        btn.BorderSizePixel = 0
-        local btnCorner = Instance.new("UICorner", btn)
-        btnCorner.CornerRadius = UDim.new(0, 6)
-        
-        btn.MouseButton1Click:Connect(function()
-            local newVal = not (btn.Text == "ON")
-            btn.Text = newVal and "ON" or "OFF"
-            btn.BackgroundColor3 = newVal and Color3.fromRGB(0, 200, 100) or Color3.fromRGB(60, 60, 70)
-            if callback then callback(newVal) end
-        end)
-        
-        return btn
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.KeyCode == CFG.AIM_KEY then
+        state.aiming = true
     end
+end)
 
-    local function createSlider(title, minValue, maxValue, defaultValue, callback)
-        local sliderFrame = Instance.new("Frame", scrollFrame)
-        sliderFrame.Name = "Slider_" .. title
-        sliderFrame.Size = UDim2.fromScale(1, 0)
-        sliderFrame.AutoHeight = true
-        sliderFrame.BackgroundTransparency = 1
-        
-        local label = Instance.new("TextLabel", sliderFrame)
-        label.Size = UDim2.fromScale(1, 0.5)
-        label.BackgroundTransparency = 1
-        label.Text = title .. " (" .. defaultValue .. ")"
-        label.TextColor3 = Color3.fromRGB(200, 200, 200)
-        label.Font = Enum.Font.Gotham
-        label.TextSize = 14
-        label.TextXAlignment = Enum.TextXAlignment.Left
-        
-        local bar = Instance.new("Frame", sliderFrame)
-        bar.Size = UDim2.fromScale(1, 0.5)
-        bar.Position = UDim2.fromScale(0, 0.5)
-        bar.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
-        bar.BorderSizePixel = 0
-        local barCorner = Instance.new("UICorner", bar)
-        barCorner.CornerRadius = UDim.new(0, 4)
-        
-        local fill = Instance.new("Frame", bar)
-        fill.Name = "Fill"
-        fill.Size = UDim2.fromScale((defaultValue - minValue) / (maxValue - minValue), 1)
-        fill.BackgroundColor3 = Color3.fromRGB(0, 200, 100)
-        fill.BorderSizePixel = 0
-        local fillCorner = Instance.new("UICorner", fill)
-        fillCorner.CornerRadius = UDim.new(0, 4)
-        
-        local handle = Instance.new("TextButton", bar)
-        handle.Size = UDim2.fromOffset(20, 20)
-        handle.Position = UDim2.fromScale((defaultValue - minValue) / (maxValue - minValue), 0)
-        handle.AnchorPoint = Vector2.new(0.5, 0)
-        handle.BackgroundColor3 = Color3.new(1,1,1)
-        handle.BorderSizePixel = 0
-        handle.Text = ""
-        local handleCorner = Instance.new("UICorner", handle)
-        handleCorner.CornerRadius = UDim.new(1, 0)
-        
-        local dragging = false
-        local dragInput
-        local dragBegin
-        local beginPos
-        
-        handle.InputBegan:Connect(function(input)
-            if input.UserInputType == Enum.UserInputType.MouseButton1 then
-                dragging = true
-                dragBegin = handle.Position
-                beginPos = input.Position
-            end
-        end)
-        
-        handle.InputEnded:Connect(function(input)
-            if input.UserInputType == Enum.UserInputType.MouseButton1 then
-                dragging = false
-            end
-        end)
-        
-        handle.InputChanged:Connect(function(input)
-            if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
-                dragInput = input
-            end
-        end)
-        
-        UserInputService.InputChanged:Connect(function(input)
-            if dragging and input == dragInput then
-                local delta = Vector2.new(input.Position.X - beginPos.X, input.Position.Y - beginPos.Y)
-                local newScale = math.clamp(dragBegin.X.Scale + (delta.X / main.AbsoluteSize.X), 0, 1)
-                handle.Position = UDim2.fromScale(newScale, 0)
-                fill.Size = UDim2.fromScale(newScale, 1)
-                
-                local val = minValue + (newScale * (maxValue - minValue))
-                label.Text = title .. " (" .. string.format("%.2f", val) .. ")"
-                if callback then callback(val) end
-            end
-        end)
-        
-        return handle
+UserInputService.InputEnded:Connect(function(input, gameProcessed)
+    if input.KeyCode == CFG.AIM_KEY then
+        state.aiming = false
     end
+end)
 
-    -- Adicionar Opções
-    createToggle("ESP", CFG.ENABLE_ESP, function(v) CFG.ENABLE_ESP = v end)
-    createToggle("Aimbot", CFG.ENABLE_AIMBOT, function(v) CFG.ENABLE_AIMBOT = v end)
-    createToggle("FOV Circle", CFG.ENABLE_FOV, function(v) CFG.ENABLE_FOV = v end)
-    createToggle("Show Names", CFG.SHOW_NAMES, function(v) CFG.SHOW_NAMES = v end
+-- ==========================================
+-- LOOP PRINCIPAL
+-- ==========================================
+RunService.RenderStepped:Connect(function()
+    updateESP()
+    applyAimbot()
+end)
+
+-- Limpeza ao sair
+game:BindToClose(function()
+    for _, bgui in pairs(state.activeBillboards) do
+        bgui:Destroy()
+    end
+end)
+
+print("[Nexus ESP v3] Ativo. Segure " .. CFG.AIM_KEY.Name .. " para mirar.")
