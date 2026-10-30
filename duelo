@@ -1,0 +1,705 @@
+-- language: Lua, target: Roblox executor (Synapse X, KRNL, Fluxus)
+-- painel GUI com ESP, Movement, Aimbot, FOV circle, sliders
+
+local Players          = game:GetService("Players")
+local RunService       = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService     = game:GetService("TweenService")
+local cam              = workspace.CurrentCamera
+local lp               = Players.LocalPlayer
+local mouse            = lp:GetMouse()
+
+-- ══════════════════════════════════════════════════════════════
+--  CONFIG
+-- ══════════════════════════════════════════════════════════════
+local cfg = {
+    esp = {
+        enabled   = false, box     = false, skeleton = false,
+        name      = false, distance= false, tracer   = false,
+        healthbar = false, teamCheck= false, maxDist = 1000,
+        colors = {
+            box      = Color3.fromRGB(255, 50,  50),
+            skeleton = Color3.fromRGB(255, 255, 255),
+            name     = Color3.fromRGB(255, 255, 255),
+            dist     = Color3.fromRGB(180, 180, 180),
+            tracer   = Color3.fromRGB(255, 200,  0),
+            healthOn = Color3.fromRGB(80,  255,  80),
+            healthOff= Color3.fromRGB(255,  50,  50),
+        },
+    },
+    movement = {
+        speed = false, speedVal  = 50,
+        fly   = false, flyVal    = 40,
+        noclip= false, infjump   = false, jumpPower = 100,
+    },
+    aimbot = {
+        enabled   = false, silent  = false,
+        fov       = 150,   smooth  = 0.15,
+        part      = "Head",
+        showFov   = true,
+    },
+}
+
+-- ══════════════════════════════════════════════════════════════
+--  THEME
+-- ══════════════════════════════════════════════════════════════
+local T = {
+    bg      = Color3.fromRGB(15,  15,  20),
+    panel   = Color3.fromRGB(22,  22,  30),
+    section = Color3.fromRGB(30,  30,  40),
+    accent  = Color3.fromRGB(100, 60, 220),
+    on      = Color3.fromRGB(80,  220, 120),
+    off     = Color3.fromRGB(60,  60,  75),
+    text    = Color3.fromRGB(220, 220, 230),
+    sub     = Color3.fromRGB(130, 130, 150),
+    slider  = Color3.fromRGB(50,  50,  70),
+}
+
+-- ══════════════════════════════════════════════════════════════
+--  GUI BUILDER HELPERS
+-- ══════════════════════════════════════════════════════════════
+local function make(cls, props, parent)
+    local o = Instance.new(cls)
+    for k,v in pairs(props) do o[k]=v end
+    if parent then o.Parent = parent end
+    return o
+end
+
+local function label(txt, size, color, parent, pos, anchorX)
+    return make("TextLabel",{
+        Text=txt, TextSize=size, TextColor3=color or T.text,
+        Font=Enum.Font.GothamSemibold,
+        BackgroundTransparency=1,
+        Size=UDim2.new(1,0,0,size+4),
+        Position=pos or UDim2.new(0,0,0,0),
+        AnchorPoint=Vector2.new(anchorX or 0,0),
+        TextXAlignment=Enum.TextXAlignment.Left,
+    }, parent)
+end
+
+-- ══════════════════════════════════════════════════════════════
+--  ROOT GUI
+-- ══════════════════════════════════════════════════════════════
+local sg = make("ScreenGui",{
+    Name="CheatPanel", ResetOnSpawn=false,
+    ZIndexBehavior=Enum.ZIndexBehavior.Sibling,
+}, lp.PlayerGui)
+
+-- ══════════════════════════════════════════════════════════════
+--  MAIN PANEL (draggable)
+-- ══════════════════════════════════════════════════════════════
+local panel = make("Frame",{
+    Size=UDim2.new(0,340,0,520),
+    Position=UDim2.new(0,80,0,80),
+    BackgroundColor3=T.bg,
+    BorderSizePixel=0,
+    ClipsDescendants=true,
+}, sg)
+make("UICorner",{CornerRadius=UDim.new(0,10)},panel)
+make("UIStroke",{Color=T.accent,Thickness=1.5,Transparency=0.4},panel)
+
+-- title bar
+local titleBar = make("Frame",{
+    Size=UDim2.new(1,0,0,36),
+    BackgroundColor3=T.panel,
+    BorderSizePixel=0,
+}, panel)
+make("UICorner",{CornerRadius=UDim.new(0,10)},titleBar)
+make("TextLabel",{
+    Text="⚡ MAHI68 | Cheat Panel",
+    TextSize=13, Font=Enum.Font.GothamBold,
+    TextColor3=T.text, BackgroundTransparency=1,
+    Size=UDim2.new(1,-40,1,0),
+    Position=UDim2.new(0,12,0,0),
+    TextXAlignment=Enum.TextXAlignment.Left,
+}, titleBar)
+
+-- minimize btn
+local minBtn = make("TextButton",{
+    Text="─", TextSize=14, Font=Enum.Font.GothamBold,
+    TextColor3=T.sub, BackgroundTransparency=1,
+    Size=UDim2.new(0,30,1,0),
+    Position=UDim2.new(1,-32,0,0),
+}, titleBar)
+
+-- content frame
+local content = make("ScrollingFrame",{
+    Size=UDim2.new(1,0,1,-40),
+    Position=UDim2.new(0,0,0,40),
+    BackgroundTransparency=1,
+    BorderSizePixel=0,
+    ScrollBarThickness=3,
+    ScrollBarImageColor3=T.accent,
+    CanvasSize=UDim2.new(0,0,0,0),
+    AutomaticCanvasSize=Enum.AutomaticSize.Y,
+}, panel)
+make("UIPadding",{PaddingLeft=UDim.new(0,10),PaddingRight=UDim.new(0,10),PaddingTop=UDim.new(0,8)},content)
+make("UIListLayout",{SortOrder=Enum.SortOrder.LayoutOrder,Padding=UDim.new(0,6)},content)
+
+-- ── DRAG ──────────────────────────────────────────────────────
+do
+    local dragging, dragStart, startPos
+    titleBar.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging  = true
+            dragStart = i.Position
+            startPos  = panel.Position
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(i)
+        if dragging and i.UserInputType == Enum.UserInputType.MouseMovement then
+            local d = i.Position - dragStart
+            panel.Position = UDim2.new(
+                startPos.X.Scale, startPos.X.Offset + d.X,
+                startPos.Y.Scale, startPos.Y.Offset + d.Y)
+        end
+    end)
+    UserInputService.InputEnded:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+    end)
+end
+
+-- minimize toggle
+local minimized = false
+minBtn.MouseButton1Click:Connect(function()
+    minimized = not minimized
+    content.Visible = not minimized
+    panel.Size = minimized and UDim2.new(0,340,0,36) or UDim2.new(0,340,0,520)
+    minBtn.Text = minimized and "+" or "─"
+end)
+
+-- ══════════════════════════════════════════════════════════════
+--  SECTION + TOGGLE + SLIDER BUILDERS
+-- ══════════════════════════════════════════════════════════════
+local function section(title, order)
+    local f = make("Frame",{
+        Size=UDim2.new(1,0,0,28),
+        BackgroundColor3=T.section,
+        BorderSizePixel=0,
+        LayoutOrder=order,
+        AutomaticSize=Enum.AutomaticSize.Y,
+    }, content)
+    make("UICorner",{CornerRadius=UDim.new(0,7)},f)
+    make("UIPadding",{
+        PaddingLeft=UDim.new(0,8),PaddingRight=UDim.new(0,8),
+        PaddingTop=UDim.new(0,6),PaddingBottom=UDim.new(0,8),
+    },f)
+    local ll = make("UIListLayout",{SortOrder=Enum.SortOrder.LayoutOrder,Padding=UDim.new(0,5)},f)
+    make("TextLabel",{
+        Text=title, TextSize=11, Font=Enum.Font.GothamBold,
+        TextColor3=T.accent, BackgroundTransparency=1,
+        Size=UDim2.new(1,0,0,14),
+        TextXAlignment=Enum.TextXAlignment.Left,
+        LayoutOrder=0,
+    },f)
+    return f
+end
+
+local function toggle(parent, txt, order, callback)
+    local row = make("Frame",{
+        Size=UDim2.new(1,0,0,26),
+        BackgroundTransparency=1,
+        LayoutOrder=order,
+    },parent)
+
+    make("TextLabel",{
+        Text=txt, TextSize=12, Font=Enum.Font.Gotham,
+        TextColor3=T.text, BackgroundTransparency=1,
+        Size=UDim2.new(1,-44,1,0),
+        TextXAlignment=Enum.TextXAlignment.Left,
+    },row)
+
+    local pill = make("Frame",{
+        Size=UDim2.new(0,38,0,20),
+        Position=UDim2.new(1,-38,0.5,-10),
+        BackgroundColor3=T.off,
+        BorderSizePixel=0,
+    },row)
+    make("UICorner",{CornerRadius=UDim.new(1,0)},pill)
+
+    local knob = make("Frame",{
+        Size=UDim2.new(0,14,0,14),
+        Position=UDim2.new(0,3,0.5,-7),
+        BackgroundColor3=Color3.new(1,1,1),
+        BorderSizePixel=0,
+    },pill)
+    make("UICorner",{CornerRadius=UDim.new(1,0)},knob)
+
+    local btn = make("TextButton",{
+        Text="", BackgroundTransparency=1,
+        Size=UDim2.new(1,0,1,0),
+    },row)
+
+    local state = false
+    btn.MouseButton1Click:Connect(function()
+        state = not state
+        local color = state and T.on or T.off
+        local kpos  = state and UDim2.new(1,-17,0.5,-7) or UDim2.new(0,3,0.5,-7)
+        TweenService:Create(pill, TweenInfo.new(0.15),{BackgroundColor3=color}):Play()
+        TweenService:Create(knob, TweenInfo.new(0.15),{Position=kpos}):Play()
+        callback(state)
+    end)
+
+    -- expose setter
+    return function(val)
+        state = val
+        local color = state and T.on or T.off
+        local kpos  = state and UDim2.new(1,-17,0.5,-7) or UDim2.new(0,3,0.5,-7)
+        pill.BackgroundColor3 = color
+        knob.Position = kpos
+        callback(state)
+    end
+end
+
+local function slider(parent, txt, min, max, default, order, callback)
+    local row = make("Frame",{
+        Size=UDim2.new(1,0,0,42),
+        BackgroundTransparency=1,
+        LayoutOrder=order,
+    },parent)
+
+    local valLabel = make("TextLabel",{
+        Text=txt..": "..default,
+        TextSize=11, Font=Enum.Font.Gotham,
+        TextColor3=T.sub, BackgroundTransparency=1,
+        Size=UDim2.new(1,0,0,16),
+        TextXAlignment=Enum.TextXAlignment.Left,
+    },row)
+
+    local track = make("Frame",{
+        Size=UDim2.new(1,0,0,6),
+        Position=UDim2.new(0,0,0,22),
+        BackgroundColor3=T.slider,
+        BorderSizePixel=0,
+    },row)
+    make("UICorner",{CornerRadius=UDim.new(1,0)},track)
+
+    local fill = make("Frame",{
+        Size=UDim2.new((default-min)/(max-min),0,1,0),
+        BackgroundColor3=T.accent,
+        BorderSizePixel=0,
+    },track)
+    make("UICorner",{CornerRadius=UDim.new(1,0)},fill)
+
+    local dragging = false
+    local function update(x)
+        local abs = track.AbsolutePosition.X
+        local w   = track.AbsoluteSize.X
+        local t   = math.clamp((x - abs)/w, 0, 1)
+        local val = math.floor(min + t*(max-min))
+        fill.Size = UDim2.new(t,0,1,0)
+        valLabel.Text = txt..": "..val
+        callback(val)
+    end
+
+    track.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true; update(i.Position.X)
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(i)
+        if dragging and i.UserInputType == Enum.UserInputType.MouseMovement then
+            update(i.Position.X)
+        end
+    end)
+    UserInputService.InputEnded:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+    end)
+end
+
+local function dropdown(parent, txt, options, default, order, callback)
+    local open = false
+    local current = default
+
+    local wrap = make("Frame",{
+        Size=UDim2.new(1,0,0,26),
+        BackgroundTransparency=1,
+        LayoutOrder=order,
+        AutomaticSize=Enum.AutomaticSize.Y,
+    },parent)
+    make("UIListLayout",{SortOrder=Enum.SortOrder.LayoutOrder},wrap)
+
+    local header = make("Frame",{
+        Size=UDim2.new(1,0,0,26),
+        BackgroundColor3=T.slider,
+        BorderSizePixel=0,
+        LayoutOrder=0,
+    },wrap)
+    make("UICorner",{CornerRadius=UDim.new(0,5)},header)
+
+    make("TextLabel",{
+        Text=txt..": "..current,
+        TextSize=11, Font=Enum.Font.Gotham,
+        TextColor3=T.text, BackgroundTransparency=1,
+        Size=UDim2.new(1,-24,1,0),
+        Position=UDim2.new(0,8,0,0),
+        TextXAlignment=Enum.TextXAlignment.Left,
+    },header)
+
+    local arrow = make("TextLabel",{
+        Text="▾", TextSize=12, Font=Enum.Font.GothamBold,
+        TextColor3=T.accent, BackgroundTransparency=1,
+        Size=UDim2.new(0,20,1,0),
+        Position=UDim2.new(1,-22,0,0),
+    },header)
+
+    local hdrLabel = header:FindFirstChildWhichIsA("TextLabel")
+
+    local hdrBtn = make("TextButton",{
+        Text="", BackgroundTransparency=1,
+        Size=UDim2.new(1,0,1,0),
+    },header)
+
+    local dropdown_frame = make("Frame",{
+        Size=UDim2.new(1,0,0,#options*24),
+        BackgroundColor3=T.section,
+        BorderSizePixel=0,
+        Visible=false,
+        LayoutOrder=1,
+        ZIndex=10,
+    },wrap)
+    make("UICorner",{CornerRadius=UDim.new(0,5)},dropdown_frame)
+    make("UIListLayout",{SortOrder=Enum.SortOrder.LayoutOrder},dropdown_frame)
+
+    for i,opt in ipairs(options) do
+        local ob = make("TextButton",{
+            Text=opt, TextSize=11, Font=Enum.Font.Gotham,
+            TextColor3=T.text, BackgroundTransparency=1,
+            Size=UDim2.new(1,0,0,24),
+            LayoutOrder=i,
+        },dropdown_frame)
+        ob.MouseButton1Click:Connect(function()
+            current = opt
+            hdrLabel.Text = txt..": "..current
+            open = false
+            dropdown_frame.Visible = false
+            arrow.Text = "▾"
+            callback(opt)
+        end)
+    end
+
+    hdrBtn.MouseButton1Click:Connect(function()
+        open = not open
+        dropdown_frame.Visible = open
+        arrow.Text = open and "▴" or "▾"
+    end)
+end
+
+-- ══════════════════════════════════════════════════════════════
+--  BUILD SECTIONS
+-- ══════════════════════════════════════════════════════════════
+
+-- ── ESP ──────────────────────────────────────────────────────
+local espSec = section("[ ESP ]", 1)
+toggle(espSec,"ESP Enabled",  1, function(v) cfg.esp.enabled   = v end)
+toggle(espSec,"Box",          2, function(v) cfg.esp.box       = v end)
+toggle(espSec,"Skeleton",     3, function(v) cfg.esp.skeleton  = v end)
+toggle(espSec,"Name",         4, function(v) cfg.esp.name      = v end)
+toggle(espSec,"Distance",     5, function(v) cfg.esp.distance  = v end)
+toggle(espSec,"Tracers",      6, function(v) cfg.esp.tracer    = v end)
+toggle(espSec,"Health Bar",   7, function(v) cfg.esp.healthbar = v end)
+toggle(espSec,"Team Check",   8, function(v) cfg.esp.teamCheck = v end)
+slider(espSec,"Max Dist", 100,2000,1000,9, function(v) cfg.esp.maxDist = v end)
+
+-- ── MOVEMENT ──────────────────────────────────────────────────
+local movSec = section("[ MOVEMENT ]", 2)
+toggle(movSec,"Speed Hack",    1, function(v) cfg.movement.speed   = v; if lp.Character then local h=lp.Character:FindFirstChildOfClass("Humanoid") if h then h.WalkSpeed = v and cfg.movement.speedVal or 16 end end end)
+slider(movSec,"Speed Value", 16, 300, 50, 2, function(v) cfg.movement.speedVal = v; if cfg.movement.speed then local h=lp.Character and lp.Character:FindFirstChildOfClass("Humanoid") if h then h.WalkSpeed=v end end end)
+toggle(movSec,"Fly",           3, function(v) cfg.movement.fly     = v; handleFly(v) end)
+slider(movSec,"Fly Speed",  10, 200, 40, 4, function(v) cfg.movement.flyVal   = v end)
+toggle(movSec,"Noclip",        5, function(v) cfg.movement.noclip  = v end)
+toggle(movSec,"Inf Jump",      6, function(v) cfg.movement.infjump = v end)
+slider(movSec,"Jump Power",  50, 500,100, 7, function(v) cfg.movement.jumpPower= v; if cfg.movement.infjump then local h=lp.Character and lp.Character:FindFirstChildOfClass("Humanoid") if h then h.JumpPower=v end end end)
+
+-- ── AIMBOT ────────────────────────────────────────────────────
+local aimSec = section("[ AIMBOT ]", 3)
+toggle(aimSec,"Aimbot",       1, function(v) cfg.aimbot.enabled = v end)
+toggle(aimSec,"Silent Aim",   2, function(v) cfg.aimbot.silent  = v end)
+toggle(aimSec,"Show FOV",     3, function(v) cfg.aimbot.showFov = v; fovCircle.Visible = v end)
+slider(aimSec,"FOV Radius", 20, 600, 150, 4, function(v) cfg.aimbot.fov = v; fovCircle.Radius = v end)
+slider(aimSec,"Smoothness",   1, 100,  15, 5, function(v) cfg.aimbot.smooth = v/100 end)
+dropdown(aimSec,"Target Part",{"Head","HumanoidRootPart","UpperTorso"},"Head",6,function(v) cfg.aimbot.part=v end)
+
+-- ══════════════════════════════════════════════════════════════
+--  FOV CIRCLE
+-- ══════════════════════════════════════════════════════════════
+local fovCircle = Drawing.new("Circle")
+fovCircle.Visible   = false
+fovCircle.Radius    = cfg.aimbot.fov
+fovCircle.Color     = Color3.fromRGB(255,255,255)
+fovCircle.Thickness = 1
+fovCircle.Filled    = false
+fovCircle.Transparency = 1
+
+RunService.RenderStepped:Connect(function()
+    local vp = cam.ViewportSize
+    fovCircle.Position = Vector2.new(vp.X/2, vp.Y/2)
+    fovCircle.Visible  = cfg.aimbot.showFov and cfg.aimbot.enabled
+end)
+
+-- ══════════════════════════════════════════════════════════════
+--  SKELETON / ESP BONES
+-- ══════════════════════════════════════════════════════════════
+local BONES = {
+    {"Head","UpperTorso"},{"UpperTorso","LowerTorso"},
+    {"UpperTorso","RightUpperArm"},{"RightUpperArm","RightLowerArm"},{"RightLowerArm","RightHand"},
+    {"UpperTorso","LeftUpperArm"},{"LeftUpperArm","LeftLowerArm"},{"LeftLowerArm","LeftHand"},
+    {"LowerTorso","RightUpperLeg"},{"RightUpperLeg","RightLowerLeg"},{"RightLowerLeg","RightFoot"},
+    {"LowerTorso","LeftUpperLeg"},{"LeftUpperLeg","LeftLowerLeg"},{"LeftLowerLeg","LeftFoot"},
+}
+
+local function w2s(pos)
+    local sp, vis = cam:WorldToViewportPoint(pos)
+    return Vector2.new(sp.X, sp.Y), vis, sp.Z
+end
+
+local espObjects = {}
+
+local function newDraw(t, props)
+    local d = Drawing.new(t)
+    for k,v in pairs(props) do d[k]=v end
+    return d
+end
+
+local function buildPool(player)
+    local obj = { box={}, skel={}, tracer=nil, hbar={}, name=nil, dist=nil }
+    for i=1,4 do
+        obj.box[i] = newDraw("Line",{Visible=false,Color=cfg.esp.colors.box,Thickness=1})
+    end
+    for i=1,#BONES do
+        obj.skel[i] = newDraw("Line",{Visible=false,Color=cfg.esp.colors.skeleton,Thickness=1})
+    end
+    obj.tracer = newDraw("Line",{Visible=false,Color=cfg.esp.colors.tracer,Thickness=1})
+    obj.hbar.bg  = newDraw("Line",{Visible=false,Color=Color3.fromRGB(0,0,0),Thickness=4})
+    obj.hbar.fill= newDraw("Line",{Visible=false,Color=cfg.esp.colors.healthOn,Thickness=3})
+    obj.name = newDraw("Text",{Visible=false,Color=cfg.esp.colors.name,Size=13,Center=true,Outline=true,OutlineColor=Color3.new(0,0,0),Text=player.Name,Font=2})
+    obj.dist = newDraw("Text",{Visible=false,Color=cfg.esp.colors.dist,Size=11,Center=true,Outline=true,OutlineColor=Color3.new(0,0,0),Font=2})
+    espObjects[player] = obj
+end
+
+local function removePool(player)
+    if not espObjects[player] then return end
+    local obj = espObjects[player]
+    for _,l in ipairs(obj.box)  do pcall(function()l:Remove()end) end
+    for _,l in ipairs(obj.skel) do pcall(function()l:Remove()end) end
+    pcall(function()obj.tracer:Remove()end)
+    pcall(function()obj.hbar.bg:Remove()end)
+    pcall(function()obj.hbar.fill:Remove()end)
+    pcall(function()obj.name:Remove()end)
+    pcall(function()obj.dist:Remove()end)
+    espObjects[player] = nil
+end
+
+for _,p in ipairs(Players:GetPlayers()) do if p~=lp then buildPool(p) end end
+Players.PlayerAdded:Connect(function(p) if p~=lp then buildPool(p) end end)
+Players.PlayerRemoving:Connect(removePool)
+
+local function drawBox4(lines, tl, tr, br, bl)
+    local c = {tl,tr,br,bl,tl}
+    for i=1,4 do lines[i].From=c[i]; lines[i].To=c[i+1]; lines[i].Visible=true end
+end
+local function hideLines(t) for _,l in ipairs(t) do l.Visible=false end end
+
+-- ══════════════════════════════════════════════════════════════
+--  ESP RENDER LOOP
+-- ══════════════════════════════════════════════════════════════
+local vp = cam.ViewportSize
+RunService.RenderStepped:Connect(function()
+    vp = cam.ViewportSize
+    local myRoot = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+
+    for player, obj in pairs(espObjects) do
+        local char = player.Character
+        local function hide()
+            hideLines(obj.box); hideLines(obj.skel)
+            obj.tracer.Visible=false; obj.hbar.bg.Visible=false
+            obj.hbar.fill.Visible=false; obj.name.Visible=false; obj.dist.Visible=false
+        end
+
+        if not cfg.esp.enabled or not char then hide() continue end
+
+        local root = char:FindFirstChild("HumanoidRootPart")
+        local head = char:FindFirstChild("Head")
+        local hum  = char:FindFirstChildOfClass("Humanoid")
+        if not root or not head or not hum or hum.Health<=0 then hide() continue end
+        if cfg.esp.teamCheck and player.Team==lp.Team then hide() continue end
+
+        local dist = myRoot and (root.Position-myRoot.Position).Magnitude or 0
+        if dist > cfg.esp.maxDist then hide() continue end
+
+        local _, hv, hz = w2s(head.Position)
+        if not hv or hz<0 then hide() continue end
+
+        local top2d = w2s(head.Position+Vector3.new(0,0.7,0))
+        local bot2d = w2s(root.Position-Vector3.new(0,3,0))
+        local height = math.abs(top2d.Y - bot2d.Y)
+        local width  = height * 0.5
+
+        -- box
+        if cfg.esp.box then
+            drawBox4(obj.box,
+                Vector2.new(top2d.X-width, top2d.Y),
+                Vector2.new(top2d.X+width, top2d.Y),
+                Vector2.new(top2d.X+width, bot2d.Y),
+                Vector2.new(top2d.X-width, bot2d.Y))
+        else hideLines(obj.box) end
+
+        -- skeleton
+        if cfg.esp.skeleton then
+            for i, pair in ipairs(BONES) do
+                local p0=char:FindFirstChild(pair[1]); local p1=char:FindFirstChild(pair[2])
+                if p0 and p1 then
+                    local s0,v0=w2s(p0.Position); local s1,v1=w2s(p1.Position)
+                    obj.skel[i].From=s0; obj.skel[i].To=s1; obj.skel[i].Visible=v0 and v1
+                else obj.skel[i].Visible=false end
+            end
+        else hideLines(obj.skel) end
+
+        -- tracer
+        if cfg.esp.tracer then
+            obj.tracer.From    = Vector2.new(vp.X/2, vp.Y)
+            obj.tracer.To      = Vector2.new(top2d.X, bot2d.Y)
+            obj.tracer.Visible = true
+        else obj.tracer.Visible=false end
+
+        -- health bar
+        if cfg.esp.healthbar then
+            local hp   = hum.Health/hum.MaxHealth
+            local barX = top2d.X - width - 5
+            local hColor = Color3.fromRGB(
+                math.floor((1-hp)*255), math.floor(hp*255), 50)
+            obj.hbar.bg.From   = Vector2.new(barX, top2d.Y)
+            obj.hbar.bg.To     = Vector2.new(barX, bot2d.Y)
+            obj.hbar.bg.Visible= true
+            obj.hbar.fill.From = Vector2.new(barX, bot2d.Y)
+            obj.hbar.fill.To   = Vector2.new(barX, bot2d.Y - height*hp)
+            obj.hbar.fill.Color= hColor
+            obj.hbar.fill.Visible=true
+        else obj.hbar.bg.Visible=false; obj.hbar.fill.Visible=false end
+
+        -- name
+        if cfg.esp.name then
+            local np = w2s(head.Position+Vector3.new(0,1.2,0))
+            obj.name.Position=np-Vector2.new(0,16); obj.name.Visible=true
+        else obj.name.Visible=false end
+
+        -- distance
+        if cfg.esp.distance then
+            obj.dist.Text    = string.format("[%.0fm]",dist)
+            obj.dist.Position= bot2d+Vector2.new(0,4)
+            obj.dist.Visible = true
+        else obj.dist.Visible=false end
+    end
+end)
+
+-- ══════════════════════════════════════════════════════════════
+--  AIMBOT
+-- ══════════════════════════════════════════════════════════════
+local function getClosestTarget()
+    local center   = Vector2.new(vp.X/2, vp.Y/2)
+    local bestDist = cfg.aimbot.fov
+    local bestPart = nil
+
+    for _,player in ipairs(Players:GetPlayers()) do
+        if player == lp then continue end
+        local char = player.Character
+        if not char then continue end
+        local part = char:FindFirstChild(cfg.aimbot.part)
+        local hum  = char:FindFirstChildOfClass("Humanoid")
+        if not part or not hum or hum.Health<=0 then continue end
+
+        local sp, vis, z = w2s(part.Position)
+        if not vis or z<0 then continue end
+
+        local d = (sp - center).Magnitude
+        if d < bestDist then
+            bestDist = d
+            bestPart = part
+        end
+    end
+    return bestPart
+end
+
+RunService.RenderStepped:Connect(function()
+    if not cfg.aimbot.enabled then return end
+    if not UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then return end
+
+    local target = getClosestTarget()
+    if not target then return end
+
+    if cfg.aimbot.silent then
+        -- silent aim: deflect bullet origin toward target
+        local sp = w2s(target.Position)
+        mouse.Hit = CFrame.new(target.Position)
+    else
+        -- smooth aim: lerp camera toward target
+        local targetCF = CFrame.new(cam.CFrame.Position, target.Position)
+        cam.CFrame = cam.CFrame:Lerp(targetCF, cfg.aimbot.smooth)
+    end
+end)
+
+-- ══════════════════════════════════════════════════════════════
+--  MOVEMENT LOGIC
+-- ══════════════════════════════════════════════════════════════
+local charRef, rootRef, humRef
+local function getChar()
+    charRef = lp.Character or lp.CharacterAdded:Wait()
+    rootRef = charRef:WaitForChild("HumanoidRootPart")
+    humRef  = charRef:WaitForChild("Humanoid")
+end
+getChar()
+lp.CharacterAdded:Connect(getChar)
+
+UserInputService.JumpRequest:Connect(function()
+    if cfg.movement.infjump and humRef then
+        humRef:ChangeState(Enum.HumanoidStateType.Jumping)
+    end
+end)
+
+RunService.Stepped:Connect(function()
+    if cfg.movement.noclip and charRef then
+        for _,p in ipairs(charRef:GetDescendants()) do
+            if p:IsA("BasePart") then p.CanCollide=false end
+        end
+    end
+end)
+
+local flyConn, flyBP, flyBA
+function handleFly(on)
+    if on then
+        if flyConn then flyConn:Disconnect() end
+        flyBP = Instance.new("BodyVelocity", rootRef)
+        flyBP.MaxForce = Vector3.new(1e9,1e9,1e9); flyBP.Velocity=Vector3.zero
+        flyBA = Instance.new("BodyAngularVelocity", rootRef)
+        flyBA.MaxTorque=Vector3.new(1e9,1e9,1e9); flyBA.AngularVelocity=Vector3.zero
+        humRef:ChangeState(Enum.HumanoidStateType.Physics)
+        flyConn = RunService.Heartbeat:Connect(function()
+            if not cfg.movement.fly then
+                pcall(function()flyBP:Destroy()end); pcall(function()flyBA:Destroy()end)
+                flyConn:Disconnect(); humRef:ChangeState(Enum.HumanoidStateType.GettingUp); return
+            end
+            local c=workspace.CurrentCamera; local dir=Vector3.zero
+            if UserInputService:IsKeyDown(Enum.KeyCode.W) then dir=dir+c.CFrame.LookVector end
+            if UserInputService:IsKeyDown(Enum.KeyCode.S) then dir=dir-c.CFrame.LookVector end
+            if UserInputService:IsKeyDown(Enum.KeyCode.A) then dir=dir-c.CFrame.RightVector end
+            if UserInputService:IsKeyDown(Enum.KeyCode.D) then dir=dir+c.CFrame.RightVector end
+            if UserInputService:IsKeyDown(Enum.KeyCode.Space)     then dir=dir+Vector3.new(0,1,0) end
+            if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then dir=dir-Vector3.new(0,1,0) end
+            flyBP.Velocity = dir.Magnitude>0 and dir.Unit*cfg.movement.flyVal or Vector3.zero
+        end)
+    else
+        if flyConn then flyConn:Disconnect() end
+        pcall(function()flyBP:Destroy()end); pcall(function()flyBA:Destroy()end)
+        if humRef then humRef:ChangeState(Enum.HumanoidStateType.GettingUp) end
+    end
+end
+
+-- ══════════════════════════════════════════════════════════════
+--  PANEL TOGGLE  (Insert key)
+-- ══════════════════════════════════════════════════════════════
+UserInputService.InputBegan:Connect(function(inp, gp)
+    if gp then return end
+    if inp.KeyCode == Enum.KeyCode.Insert then
+        panel.Visible = not panel.Visible
+    end
+end)
