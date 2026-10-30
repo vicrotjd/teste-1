@@ -1,65 +1,54 @@
--- Nexus Visual ESP & Aimbot (Diagnóstica)
--- Prioridade: Visibilidade e Estabilidade
+-- Stickman ESP (Universal & Stable)
+-- Desenha um boneco palito sobre todos os players inimigos.
 
 local Players = game:GetService("Players")
-local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
 
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
--- ==========================================
 -- CONFIG
--- ==========================================
 local CFG = {
-    AIM_KEY = Enum.KeyCode.C,
-    SMOOTHING = 0.15,
-    MAX_DIST = 400,
-    ESP_COLOR = Color3.fromRGB(0, 255, 128),
-    TARGET_COLOR = Color3.fromRGB(255, 50, 50),
-    ENABLE_ESP = true,
-    ENABLE_AIMBOT = true,
-    SHOW_NAMES = true,
-    MAX_ESP_OBJECTS = 15
+    COLOR = Color3.fromRGB(0, 255, 128), -- Verde Neon
+    MAX_DIST = 300, -- Distância máxima para mostrar o ESP
+    LINE_THICKNESS = 3, -- Espessura das linhas
+    SHOW_NAME = true, -- Mostra o nome do player
+    IGNORE_FRIENDS = true -- Ignora players do mesmo time
 }
 
-local state = {
-    aiming = false,
-    target = nil,
-    billboards = {},
-    uiCreated = false
-}
+local activeBillboards = {} -- Cache: [PlayerName] = BillboardGui
 
 -- ==========================================
--- UTILITÁRIOS
+-- FUNÇÕES UTILITÁRIAS
 -- ==========================================
-local function getRoot(model)
+local function getHRP(model)
     if not model or not model:IsA("Model") then return nil end
     return model:FindFirstChild("HumanoidRootPart")
 end
 
 local function isFriendly(model)
     if model == LocalPlayer.Character then return true end
+    if not CFG.IGNORE_FRIENDS then return false end
     local team = model:FindFirstChildOfClass("Team")
     if team and team.Team == LocalPlayer.Team then return true end
     return false
 end
 
 -- ==========================================
--- ESP: BONECO PALITO (Simplificado)
+-- CRIAÇÃO DO BONECO PALITO
 -- ==========================================
-local function createStickmanESP(player)
-    if state.billboards[player.Name] then
-        return state.billboards[player.Name]
+local function createStickman(player)
+    if activeBillboards[player.Name] then
+        return activeBillboards[player.Name]
     end
 
     local char = player.Character
     if not char then return nil end
-    local hrp = getRoot(char)
+    local hrp = getHRP(char)
     if not hrp then return nil end
 
     local bgui = Instance.new("BillboardGui")
-    bgui.Name = "NexusESP_" .. player.Name
+    bgui.Name = "StickmanESP_" .. player.Name
     bgui.Adornee = hrp
     bgui.Size = UDim2.fromOffset(100, 150)
     bgui.StudsOffset = Vector3.new(0, 1.5, 0)
@@ -68,26 +57,27 @@ local function createStickmanESP(player)
     bgui.ResetOnSpawn = false
     bgui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 
-    -- Estrutura do Palito (Frames finos)
+    -- Frame Principal
     local main = Instance.new("Frame", bgui)
     main.Name = "Main"
     main.Size = UDim2.fromScale(1, 1)
     main.BackgroundTransparency = 1
     main.BorderSizePixel = 0
 
+    -- Função auxiliar para criar linhas
     local function makeLine(name, size, pos, rot)
         local l = Instance.new("Frame", main)
         l.Name = name
         l.Size = size
         l.Position = pos
         l.AnchorPoint = Vector2.new(0.5, 0.5)
-        l.BackgroundColor3 = CFG.ESP_COLOR
+        l.BackgroundColor3 = CFG.COLOR
         l.BorderSizePixel = 0
         if rot then l.Rotation = rot end
         return l
     end
 
-    -- Cabeça
+    -- CABEÇA (Quadrado com borda)
     local head = Instance.new("Frame", main)
     head.Name = "Head"
     head.Size = UDim2.fromOffset(16, 16)
@@ -96,250 +86,90 @@ local function createStickmanESP(player)
     head.BackgroundColor3 = Color3.new(0,0,0)
     head.BorderSizePixel = 0
     local headStroke = Instance.new("UIStroke", head)
-    headStroke.Color = CFG.ESP_COLOR
-    headStroke.Thickness = 2
+    headStroke.Color = CFG.COLOR
+    headStroke.Thickness = CFG.LINE_THICKNESS
 
-    -- Torso
-    makeLine("Torso", UDim2.fromOffset(4, 50), UDim2.fromScale(0.5, 0.5))
+    -- TORSO (Linha vertical central)
+    makeLine("Torso", UDim2.fromOffset(CFG.LINE_THICKNESS, 50), UDim2.fromScale(0.5, 0.5))
     
-    -- Braços
-    makeLine("LArm", UDim2.fromOffset(4, 35), UDim2.fromScale(0.35, 0.4), 30)
-    makeLine("RArm", UDim2.fromOffset(4, 35), UDim2.fromScale(0.65, 0.4), -30)
+    -- BRAÇO ESQUERDO (Diagonal)
+    makeLine("LeftArm", UDim2.fromOffset(CFG.LINE_THICKNESS, 35), UDim2.fromScale(0.35, 0.4), 30)
+    -- BRAÇO DIREITO (Diagonal)
+    makeLine("RightArm", UDim2.fromOffset(CFG.LINE_THICKNESS, 35), UDim2.fromScale(0.65, 0.4), -30)
     
-    -- Pernas
-    makeLine("LLeg", UDim2.fromOffset(4, 45), UDim2.fromScale(0.4, 0.75), 15)
-    makeLine("RLeg", UDim2.fromOffset(4, 45), UDim2.fromScale(0.6, 0.75), -15)
+    -- Perna ESQUERDA (Diagonal)
+    makeLine("LeftLeg", UDim2.fromOffset(CFG.LINE_THICKNESS, 45), UDim2.fromScale(0.4, 0.75), 15)
+    -- PERNA DIREITA (Diagonal)
+    makeLine("RightLeg", UDim2.fromOffset(CFG.LINE_THICKNESS, 45), UDim2.fromScale(0.6, 0.75), -15)
 
-    -- Nome
-    local nameLabel = Instance.new("TextLabel", main)
-    nameLabel.Name = "NameLabel"
-    nameLabel.Size = UDim2.fromScale(1, 0.1)
-    nameLabel.Position = UDim2.fromScale(0, -0.1)
-    nameLabel.BackgroundTransparency = 1
-    nameLabel.Text = player.Name
-    nameLabel.TextColor3 = Color3.new(1, 1, 1)
-    nameLabel.Font = Enum.Font.GothamBold
-    nameLabel.TextSize = 12
-    nameLabel.Visible = CFG.SHOW_NAMES
+    -- NOME (Opcional)
+    if CFG.SHOW_NAME then
+        local nameLabel = Instance.new("TextLabel", main)
+        nameLabel.Name = "NameLabel"
+        nameLabel.Size = UDim2.fromScale(1, 0.1)
+        nameLabel.Position = UDim2.fromScale(0, -0.1)
+        nameLabel.BackgroundTransparency = 1
+        nameLabel.Text = player.Name
+        nameLabel.TextColor3 = Color3.new(1, 1, 1)
+        nameLabel.Font = Enum.Font.GothamBold
+        nameLabel.TextSize = 12
+    end
 
-    state.billboards[player.Name] = bgui
+    activeBillboards[player.Name] = bgui
     return bgui
 end
 
-local function removeESP(playerName)
-    local bgui = state.billboards[playerName]
+local function removeStickman(playerName)
+    local bgui = activeBillboards[playerName]
     if bgui then
         bgui:Destroy()
-        state.billboards[playerName] = nil
+        activeBillboards[playerName] = nil
     end
 end
 
-local function updateESP()
+-- ==========================================
+-- LOOP PRINCIPAL (Renderização)
+-- ==========================================
+RunService.RenderStepped:Connect(function()
     local camPos = Camera.CFrame.Position
-    local visible = {}
+    local visiblePlayers = {}
 
+    -- 1. Identificar quem deve ser mostrado
     for _, player in ipairs(Players:GetPlayers()) do
         if player == LocalPlayer then continue end
         if not player.Character then continue end
         if isFriendly(player.Character) then
-            removeESP(player.Name)
+            removeStickman(player.Name)
             continue
         end
 
-        local hrp = getRoot(player.Character)
+        local hrp = getHRP(player.Character)
         if not hrp then continue end
 
         local dist = (camPos - hrp.Position).Magnitude
         if dist <= CFG.MAX_DIST then
-            table.insert(visible, player)
+            table.insert(visiblePlayers, player)
         else
-            removeESP(player.Name)
+            removeStickman(player.Name)
         end
     end
 
-    -- Limite
-    if #visible > CFG.MAX_ESP_OBJECTS then
-        table.sort(visible, function(a, b)
-            local aHRP = getRoot(a.Character)
-            local bHRP = getRoot(b.Character)
-            if not aHRP or not bHRP then return true end
-            return (camPos - aHRP.Position).Magnitude > (camPos - bHRP.Position).Magnitude
-        end)
-        for i = CFG.MAX_ESP_OBJECTS + 1, #visible do
-            removeESP(visible[i].Name)
-        end
-    end
-
-    for _, player in ipairs(visible) do
-        if not state.billboards[player.Name] then
-            createStickmanESP(player)
+    -- 2. Criar/Atualizar Billboards
+    for _, player in ipairs(visiblePlayers) do
+        if not activeBillboards[player.Name] then
+            createStickman(player)
         else
-            local bgui = state.billboards[player.Name]
-            bgui.Enabled = CFG.ENABLE_ESP
-            local head = bgui:FindFirstChild("Main"):FindFirstChild("Head")
-            if head then
-                local stroke = head:FindFirstChildOfClass("UIStroke")
-                if stroke then
-                    stroke.Color = (state.target and state.target.model == player) and CFG.TARGET_COLOR or CFG.ESP_COLOR
-                end
-            end
+            -- Garante que está visível (caso tenha sido desativado)
+            activeBillboards[player.Name].Enabled = true
         end
     end
-end
+end)
 
--- ==========================================
--- AIMBOT
--- ==========================================
-local function getTarget()
-    local best = nil
-    local bestScore = -math.huge
-    local camPos = Camera.CFrame.Position
-    local lookVec = Camera.CFrame.LookVector
-
-    if not (camPos and lookVec) then return nil end
-
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player == LocalPlayer then continue end
-        if not player.Character then continue end
-        if isFriendly(player.Character) then continue end
-
-        local hrp = getRoot(player.Character)
-        if not hrp then continue end
-
-        local dist = (camPos - hrp.Position).Magnitude
-        if dist > CFG.MAX_DIST or dist == 0 then continue end
-
-        local dir = (hrp.Position - camPos).Unit
-        local dot = lookVec:Dot(dir)
-
-        if dot > 0.9 then
-            local score = dot - (dist / 1000)
-            if score > bestScore then
-                bestScore = score
-                best = { model = player, hrp = hrp, pos = hrp.Position, dist = dist }
-            end
-        end
+-- Limpeza ao sair do jogo
+game:BindToClose(function()
+    for _, bgui in pairs(activeBillboards) do
+        bgui:Destroy()
     end
-    return best
-end
+end)
 
-local function applyAimbot()
-    if not (CFG.ENABLE_AIMBOT and state.aiming) then
-        state.target = nil
-        return
-    end
-
-    local target = getTarget()
-    state.target = target
-
-    if target then
-        local camCF = Camera.CFrame
-        if not camCF:IsA("CFrame") or camCF.Position:Dot(Vector3.one) == 0 then return end
-        
-        local targetPos = target.pos
-        local targetDir = (targetPos - camCF.Position)
-        if targetDir.Magnitude < 0.1 then return end
-        
-        local desiredLook = targetDir.Unit
-        local currentLook = camCF.LookVector
-        local newLook = currentLook:Lerp(desiredLook, CFG.SMOOTHING)
-        
-        if newLook:Dot(Vector3.one) == 0 then return end
-
-        Camera.CFrame = CFrame.lookAt(camCF.Position, camCF.Position + newLook)
-    end
-end
-
--- ==========================================
--- UI: PAINEL FIXO (Canto Superior Direito)
--- ==========================================
-local function createPanel()
-    if state.uiCreated then return end
-    state.uiCreated = true
-
-    local gui = Instance.new("ScreenGui")
-    gui.Name = "Nexus_Panel"
-    gui.ResetOnSpawn = false
-    gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    gui.Parent = LocalPlayer:WaitForChild("PlayerGui")
-
-    local main = Instance.new("Frame", gui)
-    main.Name = "Main"
-    main.Size = UDim2.fromOffset(220, 160)
-    main.Position = UDim2.new(1, -230, 0, 10) -- Canto Superior Direito
-    main.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
-    main.BorderSizePixel = 0
-    main.Active = true
-    main.Draggable = true
-
-    local mainCorner = Instance.new("UICorner", main)
-    mainCorner.CornerRadius = UDim.new(0, 10)
-    local mainStroke = Instance.new("UIStroke", main)
-    mainStroke.Color = Color3.fromRGB(255, 255, 255)
-    mainStroke.Thickness = 1
-    mainStroke.Transparency = 0.7
-
-    local title = Instance.new("TextLabel", main)
-    title.Name = "Title"
-    title.Size = UDim2.fromScale(1, 0.2)
-    title.BackgroundTransparency = 1
-    title.Text = "NEXUS HUD"
-    title.TextColor3 = Color3.new(1, 1, 1)
-    title.Font = Enum.Font.GothamBold
-    title.TextSize = 14
-
-    local statusLabel = Instance.new("TextLabel", main)
-    statusLabel.Name = "Status"
-    statusLabel.Size = UDim2.fromScale(1, 0.15)
-    statusLabel.Position = UDim2.fromScale(0, 0.2)
-    statusLabel.BackgroundTransparency = 1
-    statusLabel.Text = "Target: None"
-    statusLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
-    statusLabel.Font = Enum.Font.Gotham
-    statusLabel.TextSize = 12
-
-    local function createToggle(name, default, callback)
-        local row = Instance.new("Frame", main)
-        row.Name = "Toggle_" .. name
-        row.Size = UDim2.new(1, -20, 0, 30)
-        row.Position = UDim2.new(0, 10, 0, 0)
-        row.BackgroundTransparency = 1
-        row.BorderSizePixel = 0
-
-        local label = Instance.new("TextLabel", row)
-        label.Size = UDim2.fromScale(0.6, 1)
-        label.BackgroundTransparency = 1
-        label.Text = name
-        label.TextColor3 = Color3.fromRGB(200, 200, 200)
-        label.Font = Enum.Font.Gotham
-        label.TextSize = 12
-        label.TextXAlignment = Enum.TextXAlignment.Left
-
-        local btn = Instance.new("TextButton", row)
-        btn.Size = UDim2.fromOffset(50, 24)
-        btn.Position = UDim2.new(1, -50, 0, 3)
-        btn.BackgroundColor3 = default and Color3.fromRGB(0, 200, 100) or Color3.fromRGB(60, 60, 70)
-        btn.Text = default and "ON" or "OFF"
-        btn.TextColor3 = Color3.new(1,1,1)
-        btn.Font = Enum.Font.GothamBold
-        btn.BorderSizePixel = 0
-        local btnCorner = Instance.new("UICorner", btn)
-        btnCorner.CornerRadius = UDim.new(0, 5)
-
-        btn.MouseButton1Click:Connect(function()
-            local newVal = not (btn.Text == "ON")
-            btn.Text = newVal and "ON" or "OFF"
-            btn.BackgroundColor3 = newVal and Color3.fromRGB(0, 200, 100) or Color3.fromRGB(60, 60, 70)
-            if callback then callback(newVal) end
-        end)
-
-        return row
-    end
-
-    local espToggle = createToggle("ESP", CFG.ENABLE_ESP, function(v) CFG.ENABLE_ESP = v end)
-    espToggle.Position = UDim2.new(0, 10, 0, 45)
-
-    local aimToggle = createToggle("Aimbot", CFG.ENABLE_AIMBOT, function(v) CFG.ENABLE_AIMBOT = v end)
-    aimToggle.Position = UDim2.new(0, 10, 0, 80)
-
-    local nameToggle = createToggle
+print("[Stickman ESP] Ativo. Verifique os inimigos ao seu redor.")
