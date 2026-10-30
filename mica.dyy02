@@ -1,62 +1,42 @@
--- VL Diagnostic | Xeno Compatible
--- Faz o spin/missao manualmente durante os 30s de hook
-
-local out = {}
-local function L(s) table.insert(out, s) print(s) end
-
-local kw = {"spin","luck","reward","coin","currency","claim","mission","give","money","token","prize","daily","chest","task","complete","finish"}
+-- VL Scanner v2 | Xeno
+local kw = {"spin","luck","reward","coin","currency","claim","mission","give","money","token","prize","daily","chest","task","complete","finish","purchase"}
 
 local function match(name)
     name = name:lower()
-    for _, k in ipairs(kw) do if name:find(k) then return true end end
+    for _, k in ipairs(kw) do
+        if name:find(k) then return true end
+    end
     return false
 end
 
 -- REMOTES
-L("===== REMOTES =====")
+warn("===== REMOTES RELEVANTES =====")
+local total = 0
 for _, v in ipairs(game:GetDescendants()) do
     if v:IsA("RemoteEvent") or v:IsA("RemoteFunction") then
-        L((match(v.Name) and ">> " or "   ") .. v.ClassName .. " | " .. v:GetFullName())
+        total = total + 1
+        if match(v.Name) then
+            warn(">> " .. v.ClassName .. " | " .. v:GetFullName())
+        end
+    end
+end
+warn("Total de remotes encontrados: " .. total)
+
+-- TODOS OS REMOTES (caso nenhum keyword bata)
+warn("===== TODOS OS REMOTES =====")
+for _, v in ipairs(game:GetDescendants()) do
+    if v:IsA("RemoteEvent") or v:IsA("RemoteFunction") then
+        print(v.ClassName .. " | " .. v:GetFullName())
     end
 end
 
 -- PLAYER VALUES
-L("\n===== PLAYER VALUES =====")
+warn("===== PLAYER VALUES =====")
 local plr = game.Players.LocalPlayer
 for _, v in ipairs(plr:GetDescendants()) do
     if v:IsA("IntValue") or v:IsA("NumberValue") or v:IsA("StringValue") or v:IsA("BoolValue") then
-        L("  " .. v.Name .. " = " .. tostring(v.Value) .. "  [" .. v:GetFullName() .. "]")
+        print(v.Name .. " = " .. tostring(v.Value) .. "  [" .. v:GetFullName() .. "]")
     end
 end
 
--- FIRESERVER HOOK
-L("\n===== HOOK FIRESERVER (30s) =====")
-L(">> Faz a missao/spin agora <<")
-
-local active = true
-local ok, err = pcall(function()
-    local orig = Instance.new("RemoteEvent").FireServer
-    hookfunction(orig, newcclosure(function(self, ...)
-        if active then
-            local args, s = {...}, "FIRE >> " .. self:GetFullName() .. " | "
-            for i, a in ipairs(args) do s = s .. "[" .. i .. "]=" .. tostring(a) .. " " end
-            L(s)
-        end
-        return orig(self, ...)
-    end))
-end)
-
-if not ok then
-    L("hookfunction indisponivel: " .. tostring(err))
-    L("usa getrawmetatable ou syn.protect_gui alternativo se Xeno suportar")
-end
-
-task.delay(30, function()
-    active = false
-    L("\n===== FIM =====")
-    local full = table.concat(out, "\n")
-    if setclipboard then
-        setclipboard(full)
-        L("[clipboard copiado]")
-    end
-end)
+warn("===== FIM =====")
